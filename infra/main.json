@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "13008618557256852175"
+      "templateHash": "10365326718128339202"
     },
     "description": "Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -203,8 +203,7 @@
             "action": "@{toLower(coalesce(triggerBody()?['action'], ''))}",
             "groupId": "@{toLower(coalesce(triggerBody()?['groupId'], ''))}",
             "principalId": "@{toLower(coalesce(triggerBody()?['principalId'], ''))}",
-            "accessId": "@{toLower(coalesce(triggerBody()?['accessId'], 'member'))}",
-            "startDateTime": "@{coalesce(triggerBody()?['scheduleInfo']?['startDateTime'], utcNow())}"
+            "accessId": "@{toLower(coalesce(triggerBody()?['accessId'], 'member'))}"
           }
         },
         "Initialize_activeAssignments": {
@@ -426,49 +425,17 @@
             "actions": {}
           }
         },
-        "Wait_for_scheduled_start": {
-          "runAfter": {
-            "Look_up_sync_rule": [
-              "Succeeded"
-            ]
-          },
-          "type": "If",
-          "expression": {
-            "and": [
-              {
-                "greater": [
-                  "@ticks(outputs('Parse_request')?['startDateTime'])",
-                  "@ticks(addMinutes(utcNow(), 1))"
-                ]
-              }
-            ]
-          },
-          "actions": {
-            "Delay_until_start": {
-              "runAfter": {},
-              "type": "Wait",
-              "inputs": {
-                "until": {
-                  "timestamp": "@{outputs('Parse_request')?['startDateTime']}"
-                }
-              }
-            }
-          },
-          "else": {
-            "actions": {}
-          }
-        },
         "Until_assignment_active": {
           "runAfter": {
-            "Wait_for_scheduled_start": [
+            "Look_up_sync_rule": [
               "Succeeded"
             ]
           },
           "type": "Until",
           "expression": "@greater(length(variables('activeAssignments')), 0)",
           "limit": {
-            "count": 240,
-            "timeout": "PT1H"
+            "count": 5000,
+            "timeout": "PT24H"
           },
           "actions": {
             "Get_assignment_instances": {
@@ -528,12 +495,12 @@
                 ]
               },
               "actions": {
-                "Delay_15_seconds": {
+                "Delay_before_next_poll": {
                   "runAfter": {},
                   "type": "Wait",
                   "inputs": {
                     "interval": {
-                      "count": 15,
+                      "count": "@if(less(iterationIndexes('Until_assignment_active'), 40), 15, 60)",
                       "unit": "Second"
                     }
                   }
@@ -572,7 +539,7 @@
                 "runStatus": "Failed",
                 "runError": {
                   "code": "AssignmentNotActive",
-                  "message": "No active PIM '@{outputs('Parse_request')?['accessId']}' assignment for principal @{outputs('Parse_request')?['principalId']} in group @{outputs('Parse_request')?['groupId']} within 1 hour, or the Graph lookup failed. Check Until_assignment_active in the run history and the managed identity's Graph permissions."
+                  "message": "No active PIM '@{outputs('Parse_request')?['accessId']}' assignment for principal @{outputs('Parse_request')?['principalId']} in group @{outputs('Parse_request')?['groupId']} within 24 hours, or the Graph lookup failed. Check Until_assignment_active in the run history and the managed identity's Graph permissions."
                 }
               }
             }
@@ -581,23 +548,9 @@
             "actions": {}
           }
         },
-        "Wait_for_directory_replication": {
-          "runAfter": {
-            "Fail_if_not_active": [
-              "Succeeded"
-            ]
-          },
-          "type": "Wait",
-          "inputs": {
-            "interval": {
-              "count": 30,
-              "unit": "Second"
-            }
-          }
-        },
         "Provision_on_demand": {
           "runAfter": {
-            "Wait_for_directory_replication": [
+            "Fail_if_not_active": [
               "Succeeded"
             ]
           },
@@ -810,26 +763,12 @@
                 }
               }
             },
-            "Wait_for_directory_replication_after_expiry": {
+            "Provision_on_demand_after_expiry": {
               "runAfter": {
                 "Until_assignment_removed": [
                   "Succeeded",
                   "Failed",
                   "TimedOut"
-                ]
-              },
-              "type": "Wait",
-              "inputs": {
-                "interval": {
-                  "count": 30,
-                  "unit": "Second"
-                }
-              }
-            },
-            "Provision_on_demand_after_expiry": {
-              "runAfter": {
-                "Wait_for_directory_replication_after_expiry": [
-                  "Succeeded"
                 ]
               },
               "type": "Http",

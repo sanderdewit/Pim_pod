@@ -18,8 +18,11 @@ PIM calls the post-approval custom extension ── Bearer token for the app reg
      user is also removed from the AD group right away                                       │
 ```
 
-Step 2 is needed because PIM calls the extension when the request is approved, which can be before
-the membership exists in Entra ID. It also covers activations scheduled to start later.
+Step 2 is the only wait before the sync. PIM calls the extension when the request is approved, which can
+be before PIM has added the user to the group. The Logic App checks right away, then every 15 seconds,
+and calls provisionOnDemand as soon as the activation is active. It never waits for the regular Cloud Sync
+cycle. After 10 minutes it checks once a minute, for up to 24 hours, which covers activations scheduled
+to start later.
 
 ## Do I need an app registration?
 
@@ -184,7 +187,7 @@ AD. It can't grant access.
 | `Terminate_invalid_payload` | The request body isn't the documented `privilegedAccessGroupAssignmentScheduleRequest` shape. Post-approval is a preview feature. Look at the trigger body and adjust `Parse_request`. |
 | `Get_assignment_instances` or `Provision_on_demand` returns 403 | The managed identity is missing a Graph permission. Grants can take a while to apply, because managed identity tokens are cached for up to 24 hours. |
 | `SyncRuleNotFound` | The job schema has no group rule, or more than one. Look at the `Get_sync_schema` output, then set the `syncRuleId` parameter to the right `synchronizationRules[].id`. |
-| `AssignmentNotActive` | The activation wasn't active within 1 hour of approval, for example because it was cancelled. |
+| `AssignmentNotActive` | The activation wasn't active within 24 hours of approval, for example because it was cancelled. |
 | `ProvisionOnDemandFailed`, or `Skipped` with an error code | Check the group is in scope of the Cloud Sync configuration and the user exists in AD. Run **Provision on demand** for the same group and user in the Cloud Sync portal to see the detailed steps. |
 | HTTP 429 | `provisionOnDemand` is limited to 5 requests per 10 seconds. The HTTP actions retry automatically. |
 
