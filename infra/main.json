@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "12930603347299644752"
+      "templateHash": "16758688266767501209"
     },
     "description": "Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -89,6 +89,10 @@
       "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
       "contentVersion": "1.0.0.0",
       "parameters": {
+        "$connections": {
+          "type": "Object",
+          "defaultValue": {}
+        },
         "syncServicePrincipalId": {
           "type": "String",
           "defaultValue": "7dc02c72-03d1-462b-bf75-335fbffaa19e",

@@ -93,12 +93,13 @@ authorization policy.
 Use these steps instead of the script if you'd rather click through it yourself.
 
 1. **Create the Logic App** with plan type **Consumption**.
-2. **Paste the workflow.** Open **Logic app code view**. It shows `{ "definition": { … }, "parameters": { } }`.
-   Replace only the `definition` object with the contents of `infra/workflow.json`, then **Save**. Every
-   workflow parameter has a default value, so `parameters` can stay empty. The defaults contain your service
-   principal and job IDs. `syncRuleId` is empty, so the run looks the rule up from the job schema.
-3. **Turn on the managed identity.** Go to **Settings > Identity > System assigned > On** and copy the
-   **Object (principal) ID**.
+2. **Turn on the managed identity first.** Go to **Settings > Identity > System assigned > On**, **Save**, and
+   copy the **Object (principal) ID**. The HTTP actions authenticate with this identity, so the workflow
+   won't save until it's on.
+3. **Paste the workflow.** Open **Logic app code view**. It shows `{ "definition": { … }, "parameters": { … } }`.
+   Replace only the `definition` object with the contents of `infra/workflow.json`. Leave the outer
+   `parameters` block (`$connections`) as it is, then **Save**. The defaults contain your service principal and
+   job IDs. Leave `syncRuleId` empty, so the run looks the rule up from the job schema.
 4. **Grant Graph permissions to the managed identity.** The portal can't do this step, so use PowerShell
    with the `Microsoft.Graph.Applications` module:
 

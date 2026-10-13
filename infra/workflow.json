@@ -2,6 +2,10 @@
   "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
+    "$connections": {
+      "type": "Object",
+      "defaultValue": {}
+    },
     "syncServicePrincipalId": {
       "type": "String",
       "defaultValue": "7dc02c72-03d1-462b-bf75-335fbffaa19e",
