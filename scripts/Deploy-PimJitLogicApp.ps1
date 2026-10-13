@@ -40,8 +40,8 @@ param(
 
     [string] $SyncJobId = 'AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903',
 
-    # Leave empty to let the Logic App look it up from the job schema at run time.
-    [string] $SyncRuleId = '',
+    # 'auto' lets the Logic App look it up from the job schema at run time.
+    [string] $SyncRuleId = 'auto',
 
     # Application ID in the azp claim of the token PIM sends. Leave empty until you have confirmed it.
     [string] $PimCallerAppId = '',

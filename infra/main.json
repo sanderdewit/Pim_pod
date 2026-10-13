@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "16758688266767501209"
+      "templateHash": "13008618557256852175"
     },
     "description": "Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -53,9 +53,9 @@
     },
     "syncRuleId": {
       "type": "string",
-      "defaultValue": "",
+      "defaultValue": "auto",
       "metadata": {
-        "description": "ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). Leave empty to look it up at run time."
+        "description": "ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). \"auto\" looks it up at run time."
       }
     },
     "syncOnExpiry": {
@@ -109,9 +109,9 @@
         },
         "syncRuleId": {
           "type": "String",
-          "defaultValue": "",
+          "defaultValue": "auto",
           "metadata": {
-            "description": "ID of the group synchronization rule in the job schema. Leave empty to look it up at run time."
+            "description": "ID of the group synchronization rule in the job schema. 'auto' looks it up at run time."
           }
         },
         "syncOnExpiry": {
@@ -333,10 +333,16 @@
           },
           "type": "If",
           "expression": {
-            "and": [
+            "or": [
               {
                 "equals": [
-                  "@variables('syncRuleId')",
+                  "@toLower(trim(variables('syncRuleId')))",
+                  "auto"
+                ]
+              },
+              {
+                "equals": [
+                  "@trim(variables('syncRuleId'))",
                   ""
                 ]
               }

@@ -18,8 +18,8 @@ param syncServicePrincipalId string = '7dc02c72-03d1-462b-bf75-335fbffaa19e'
 @description('ID of the Entra ID to AD group provisioning job.')
 param syncJobId string = 'AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903'
 
-@description('ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). Leave empty to look it up at run time.')
-param syncRuleId string = ''
+@description('ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). "auto" looks it up at run time.')
+param syncRuleId string = 'auto'
 
 @description('Run provisionOnDemand again after the activation ends, so the membership is also removed from AD promptly.')
 param syncOnExpiry bool = true

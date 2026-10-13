@@ -68,7 +68,7 @@ The defaults already contain your job:
 |---|---|
 | `-SyncServicePrincipalId` | `7dc02c72-03d1-462b-bf75-335fbffaa19e` |
 | `-SyncJobId` | `AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903` |
-| `-SyncRuleId` | Empty, so the Logic App looks it up from the job schema on each run |
+| `-SyncRuleId` | `auto`, so the Logic App looks it up from the job schema on each run |
 | `-SyncOnExpiry` | `$true`, which also syncs the removal when the activation ends |
 | `-GraphApiVersion` | `v1.0` (`beta` also works) |
 
@@ -99,8 +99,8 @@ Use these steps instead of the script if you'd rather click through it yourself.
 3. **Paste the workflow.** Open **Logic app code view**, select everything (Ctrl+A), and replace it with the
    complete contents of `infra/workflow.json`, then **Save**. Don't merge it with what the code view
    already shows: duplicate `triggers` or `parameters` keys make the save fail. The defaults contain your
-   service principal and job IDs. Leave `syncRuleId` as `""`, so the run looks the rule up from the job
-   schema. It's a rule ID, not an on/off switch.
+   service principal and job IDs. Leave `syncRuleId` set to `auto`, so the run looks the rule up from the job
+   schema. Any other value is sent to Cloud Sync as the rule ID.
 4. **Grant Graph permissions to the managed identity.** The portal can't do this step, so use PowerShell
    with the `Microsoft.Graph.Applications` module:
 

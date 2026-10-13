@@ -23,9 +23,9 @@
       },
       "syncRuleId": {
         "type": "String",
-        "defaultValue": "",
+        "defaultValue": "auto",
         "metadata": {
-          "description": "ID of the group synchronization rule in the job schema. Leave empty to look it up at run time."
+          "description": "ID of the group synchronization rule in the job schema. 'auto' looks it up at run time."
         }
       },
       "syncOnExpiry": {
@@ -188,8 +188,9 @@
         },
         "type": "If",
         "expression": {
-          "and": [
-            { "equals": [ "@variables('syncRuleId')", "" ] }
+          "or": [
+            { "equals": [ "@toLower(trim(variables('syncRuleId')))", "auto" ] },
+            { "equals": [ "@trim(variables('syncRuleId'))", "" ] }
           ]
         },
         "actions": {
