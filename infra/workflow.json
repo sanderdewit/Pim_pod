@@ -1,0 +1,532 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "syncServicePrincipalId": {
+      "type": "String",
+      "metadata": {
+        "description": "Object ID of the Cloud Sync service principal that owns the provisioning job."
+      }
+    },
+    "syncJobId": {
+      "type": "String",
+      "metadata": {
+        "description": "ID of the Entra ID to AD group provisioning job (AAD2ADGroupProvisioning.*)."
+      }
+    },
+    "syncRuleId": {
+      "type": "String",
+      "metadata": {
+        "description": "ID of the group synchronization rule in the job schema."
+      }
+    },
+    "syncOnExpiry": {
+      "type": "Bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Run provisionOnDemand again after the activation ends, so the membership is also removed from AD promptly."
+      }
+    },
+    "graphApiVersion": {
+      "type": "String",
+      "defaultValue": "v1.0",
+      "metadata": {
+        "description": "Microsoft Graph version used for provisionOnDemand."
+      }
+    }
+  },
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Http",
+      "inputs": {
+        "method": "POST",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "status": { "type": "string" },
+            "action": { "type": "string" },
+            "justification": { "type": "string" },
+            "principalId": { "type": "string" },
+            "accessId": { "type": "string" },
+            "groupId": { "type": "string" },
+            "scheduleInfo": { "type": "object" },
+            "ticketInfo": { "type": "object" }
+          }
+        }
+      }
+    }
+  },
+  "actions": {
+    "Respond_to_PIM": {
+      "runAfter": {},
+      "type": "Response",
+      "kind": "Http",
+      "inputs": {
+        "statusCode": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "evaluationId": "@{workflow()?['run']?['name']}",
+          "evaluationOutcome": "Approved",
+          "reason": [
+            "Accepted by @{workflow()?['name']} (run @{workflow()?['run']?['name']}). Active Directory group sync is queued."
+          ]
+        }
+      }
+    },
+    "Parse_request": {
+      "runAfter": {
+        "Respond_to_PIM": [ "Succeeded", "Failed", "TimedOut" ]
+      },
+      "type": "Compose",
+      "inputs": {
+        "requestId": "@{triggerBody()?['id']}",
+        "action": "@{toLower(coalesce(triggerBody()?['action'], ''))}",
+        "groupId": "@{toLower(coalesce(triggerBody()?['groupId'], ''))}",
+        "principalId": "@{toLower(coalesce(triggerBody()?['principalId'], ''))}",
+        "accessId": "@{toLower(coalesce(triggerBody()?['accessId'], 'member'))}",
+        "startDateTime": "@{coalesce(triggerBody()?['scheduleInfo']?['startDateTime'], utcNow())}"
+      }
+    },
+    "Initialize_activeAssignments": {
+      "runAfter": {
+        "Parse_request": [ "Succeeded" ]
+      },
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "activeAssignments",
+            "type": "array",
+            "value": []
+          }
+        ]
+      }
+    },
+    "Validate_request": {
+      "runAfter": {
+        "Initialize_activeAssignments": [ "Succeeded" ]
+      },
+      "type": "If",
+      "expression": {
+        "or": [
+          { "equals": [ "@outputs('Parse_request')?['groupId']", "" ] },
+          { "equals": [ "@outputs('Parse_request')?['principalId']", "" ] }
+        ]
+      },
+      "actions": {
+        "Terminate_invalid_payload": {
+          "runAfter": {},
+          "type": "Terminate",
+          "inputs": {
+            "runStatus": "Failed",
+            "runError": {
+              "code": "InvalidPayload",
+              "message": "The PIM request did not contain groupId and principalId. Inspect the trigger body in the run history and adjust Parse_request."
+            }
+          }
+        }
+      },
+      "else": {
+        "actions": {}
+      }
+    },
+    "Skip_if_not_member_activation": {
+      "runAfter": {
+        "Validate_request": [ "Succeeded" ]
+      },
+      "type": "If",
+      "expression": {
+        "or": [
+          { "not": { "equals": [ "@outputs('Parse_request')?['accessId']", "member" ] } },
+          { "equals": [ "@outputs('Parse_request')?['action']", "selfdeactivate" ] },
+          { "equals": [ "@outputs('Parse_request')?['action']", "adminremove" ] }
+        ]
+      },
+      "actions": {
+        "Terminate_nothing_to_sync": {
+          "runAfter": {},
+          "type": "Terminate",
+          "inputs": {
+            "runStatus": "Succeeded"
+          }
+        }
+      },
+      "else": {
+        "actions": {}
+      }
+    },
+    "Wait_for_scheduled_start": {
+      "runAfter": {
+        "Skip_if_not_member_activation": [ "Succeeded" ]
+      },
+      "type": "If",
+      "expression": {
+        "and": [
+          { "greater": [ "@ticks(outputs('Parse_request')?['startDateTime'])", "@ticks(addMinutes(utcNow(), 1))" ] }
+        ]
+      },
+      "actions": {
+        "Delay_until_start": {
+          "runAfter": {},
+          "type": "Wait",
+          "inputs": {
+            "until": {
+              "timestamp": "@{outputs('Parse_request')?['startDateTime']}"
+            }
+          }
+        }
+      },
+      "else": {
+        "actions": {}
+      }
+    },
+    "Until_assignment_active": {
+      "runAfter": {
+        "Wait_for_scheduled_start": [ "Succeeded" ]
+      },
+      "type": "Until",
+      "expression": "@greater(length(variables('activeAssignments')), 0)",
+      "limit": {
+        "count": 240,
+        "timeout": "PT1H"
+      },
+      "actions": {
+        "Get_assignment_instances": {
+          "runAfter": {},
+          "type": "Http",
+          "inputs": {
+            "method": "GET",
+            "uri": "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleInstances",
+            "queries": {
+              "$filter": "principalId eq '@{outputs('Parse_request')?['principalId']}'"
+            },
+            "authentication": {
+              "type": "ManagedServiceIdentity",
+              "audience": "https://graph.microsoft.com"
+            }
+          }
+        },
+        "Filter_group_instances": {
+          "runAfter": {
+            "Get_assignment_instances": [ "Succeeded" ]
+          },
+          "type": "Query",
+          "inputs": {
+            "from": "@coalesce(body('Get_assignment_instances')?['value'], json('[]'))",
+            "where": "@and(equals(toLower(coalesce(item()?['groupId'], '')), outputs('Parse_request')?['groupId']), equals(toLower(coalesce(item()?['accessId'], '')), outputs('Parse_request')?['accessId']))"
+          }
+        },
+        "Set_activeAssignments": {
+          "runAfter": {
+            "Filter_group_instances": [ "Succeeded" ]
+          },
+          "type": "SetVariable",
+          "inputs": {
+            "name": "activeAssignments",
+            "value": "@body('Filter_group_instances')"
+          }
+        },
+        "Delay_if_not_yet_active": {
+          "runAfter": {
+            "Set_activeAssignments": [ "Succeeded" ]
+          },
+          "type": "If",
+          "expression": {
+            "and": [
+              { "equals": [ "@length(variables('activeAssignments'))", 0 ] }
+            ]
+          },
+          "actions": {
+            "Delay_15_seconds": {
+              "runAfter": {},
+              "type": "Wait",
+              "inputs": {
+                "interval": {
+                  "count": 15,
+                  "unit": "Second"
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          }
+        }
+      }
+    },
+    "Fail_if_not_active": {
+      "runAfter": {
+        "Until_assignment_active": [ "Succeeded", "Failed", "TimedOut" ]
+      },
+      "type": "If",
+      "expression": {
+        "and": [
+          { "equals": [ "@length(variables('activeAssignments'))", 0 ] }
+        ]
+      },
+      "actions": {
+        "Terminate_not_active": {
+          "runAfter": {},
+          "type": "Terminate",
+          "inputs": {
+            "runStatus": "Failed",
+            "runError": {
+              "code": "AssignmentNotActive",
+              "message": "No active PIM '@{outputs('Parse_request')?['accessId']}' assignment for principal @{outputs('Parse_request')?['principalId']} in group @{outputs('Parse_request')?['groupId']} within 1 hour, or the Graph lookup failed. Check Until_assignment_active in the run history and the managed identity's Graph permissions."
+            }
+          }
+        }
+      },
+      "else": {
+        "actions": {}
+      }
+    },
+    "Wait_for_directory_replication": {
+      "runAfter": {
+        "Fail_if_not_active": [ "Succeeded" ]
+      },
+      "type": "Wait",
+      "inputs": {
+        "interval": {
+          "count": 30,
+          "unit": "Second"
+        }
+      }
+    },
+    "Provision_on_demand": {
+      "runAfter": {
+        "Wait_for_directory_replication": [ "Succeeded" ]
+      },
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri": "https://graph.microsoft.com/@{parameters('graphApiVersion')}/servicePrincipals/@{parameters('syncServicePrincipalId')}/synchronization/jobs/@{parameters('syncJobId')}/provisionOnDemand",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "parameters": [
+            {
+              "ruleId": "@{parameters('syncRuleId')}",
+              "subjects": [
+                {
+                  "objectId": "@{outputs('Parse_request')?['groupId']}",
+                  "objectTypeName": "Group",
+                  "links": {
+                    "members": [
+                      {
+                        "objectId": "@{outputs('Parse_request')?['principalId']}",
+                        "objectTypeName": "User"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "authentication": {
+          "type": "ManagedServiceIdentity",
+          "audience": "https://graph.microsoft.com"
+        }
+      }
+    },
+    "Provisioning_result": {
+      "runAfter": {
+        "Provision_on_demand": [ "Succeeded" ]
+      },
+      "type": "Compose",
+      "inputs": "@json(coalesce(body('Provision_on_demand')?['key'], '{\"result\":\"Unknown\"}'))"
+    },
+    "Fail_if_provisioning_failed": {
+      "runAfter": {
+        "Provisioning_result": [ "Succeeded" ]
+      },
+      "type": "If",
+      "expression": {
+        "and": [
+          { "not": { "equals": [ "@outputs('Provisioning_result')?['result']", "Success" ] } },
+          { "not": { "equals": [ "@outputs('Provisioning_result')?['result']", "Skipped" ] } }
+        ]
+      },
+      "actions": {
+        "Terminate_provisioning_failed": {
+          "runAfter": {},
+          "type": "Terminate",
+          "inputs": {
+            "runStatus": "Failed",
+            "runError": {
+              "code": "ProvisionOnDemandFailed",
+              "message": "provisionOnDemand returned: @{body('Provision_on_demand')?['key']}"
+            }
+          }
+        }
+      },
+      "else": {
+        "actions": {}
+      }
+    },
+    "Sync_again_on_expiry": {
+      "runAfter": {
+        "Fail_if_provisioning_failed": [ "Succeeded" ]
+      },
+      "type": "If",
+      "expression": {
+        "and": [
+          { "equals": [ "@parameters('syncOnExpiry')", true ] },
+          { "not": { "equals": [ "@coalesce(first(variables('activeAssignments'))?['endDateTime'], '')", "" ] } }
+        ]
+      },
+      "actions": {
+        "Delay_until_expiry": {
+          "runAfter": {},
+          "type": "Wait",
+          "inputs": {
+            "until": {
+              "timestamp": "@{if(greater(ticks(first(variables('activeAssignments'))?['endDateTime']), ticks(utcNow())), first(variables('activeAssignments'))?['endDateTime'], addMinutes(utcNow(), 1))}"
+            }
+          }
+        },
+        "Until_assignment_removed": {
+          "runAfter": {
+            "Delay_until_expiry": [ "Succeeded" ]
+          },
+          "type": "Until",
+          "expression": "@equals(length(variables('activeAssignments')), 0)",
+          "limit": {
+            "count": 60,
+            "timeout": "PT1H"
+          },
+          "actions": {
+            "Get_assignment_instances_after_expiry": {
+              "runAfter": {},
+              "type": "Http",
+              "inputs": {
+                "method": "GET",
+                "uri": "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleInstances",
+                "queries": {
+                  "$filter": "principalId eq '@{outputs('Parse_request')?['principalId']}'"
+                },
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "https://graph.microsoft.com"
+                }
+              }
+            },
+            "Filter_group_instances_after_expiry": {
+              "runAfter": {
+                "Get_assignment_instances_after_expiry": [ "Succeeded" ]
+              },
+              "type": "Query",
+              "inputs": {
+                "from": "@coalesce(body('Get_assignment_instances_after_expiry')?['value'], json('[]'))",
+                "where": "@and(equals(toLower(coalesce(item()?['groupId'], '')), outputs('Parse_request')?['groupId']), equals(toLower(coalesce(item()?['accessId'], '')), outputs('Parse_request')?['accessId']))"
+              }
+            },
+            "Set_activeAssignments_after_expiry": {
+              "runAfter": {
+                "Filter_group_instances_after_expiry": [ "Succeeded" ]
+              },
+              "type": "SetVariable",
+              "inputs": {
+                "name": "activeAssignments",
+                "value": "@body('Filter_group_instances_after_expiry')"
+              }
+            },
+            "Delay_if_still_active": {
+              "runAfter": {
+                "Set_activeAssignments_after_expiry": [ "Succeeded" ]
+              },
+              "type": "If",
+              "expression": {
+                "and": [
+                  { "greater": [ "@length(variables('activeAssignments'))", 0 ] }
+                ]
+              },
+              "actions": {
+                "Delay_60_seconds": {
+                  "runAfter": {},
+                  "type": "Wait",
+                  "inputs": {
+                    "interval": {
+                      "count": 60,
+                      "unit": "Second"
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {}
+              }
+            }
+          }
+        },
+        "Wait_for_directory_replication_after_expiry": {
+          "runAfter": {
+            "Until_assignment_removed": [ "Succeeded", "Failed", "TimedOut" ]
+          },
+          "type": "Wait",
+          "inputs": {
+            "interval": {
+              "count": 30,
+              "unit": "Second"
+            }
+          }
+        },
+        "Provision_on_demand_after_expiry": {
+          "runAfter": {
+            "Wait_for_directory_replication_after_expiry": [ "Succeeded" ]
+          },
+          "type": "Http",
+          "inputs": {
+            "method": "POST",
+            "uri": "https://graph.microsoft.com/@{parameters('graphApiVersion')}/servicePrincipals/@{parameters('syncServicePrincipalId')}/synchronization/jobs/@{parameters('syncJobId')}/provisionOnDemand",
+            "headers": {
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "parameters": [
+                {
+                  "ruleId": "@{parameters('syncRuleId')}",
+                  "subjects": [
+                    {
+                      "objectId": "@{outputs('Parse_request')?['groupId']}",
+                      "objectTypeName": "Group",
+                      "links": {
+                        "members": [
+                          {
+                            "objectId": "@{outputs('Parse_request')?['principalId']}",
+                            "objectTypeName": "User"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "authentication": {
+              "type": "ManagedServiceIdentity",
+              "audience": "https://graph.microsoft.com"
+            }
+          }
+        },
+        "Provisioning_result_after_expiry": {
+          "runAfter": {
+            "Provision_on_demand_after_expiry": [ "Succeeded" ]
+          },
+          "type": "Compose",
+          "inputs": "@json(coalesce(body('Provision_on_demand_after_expiry')?['key'], '{\"result\":\"Unknown\"}'))"
+        }
+      },
+      "else": {
+        "actions": {}
+      }
+    }
+  },
+  "outputs": {}
+}

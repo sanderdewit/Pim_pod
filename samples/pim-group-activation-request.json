@@ -1,0 +1,18 @@
+{
+  "@odata.type": "#microsoft.graph.privilegedAccessGroupAssignmentScheduleRequest",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "status": "Granted",
+  "action": "selfActivate",
+  "justification": "Test of LA-PIM-JIT",
+  "principalId": "<object ID of a user with an ACTIVE membership of the group>",
+  "accessId": "member",
+  "groupId": "<object ID of the PIM-enabled group that Cloud Sync provisions to AD>",
+  "scheduleInfo": {
+    "startDateTime": null,
+    "expiration": {
+      "type": "afterDuration",
+      "duration": "PT1H"
+    }
+  },
+  "ticketInfo": {}
+}
