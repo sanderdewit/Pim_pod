@@ -51,6 +51,10 @@ param(
     [ValidateSet('v1.0', 'beta')]
     [string] $GraphApiVersion = 'v1.0',
 
+    # Approved keeps any human approval in the PIM flow. AutoApproved skips it; see README.
+    [ValidateSet('Approved', 'AutoApproved')]
+    [string] $EvaluationOutcome = 'Approved',
+
     # Troubleshooting only: show the Authorization header PIM sends in the Logic App run history.
     [switch] $IncludeAuthorizationHeaderInRunHistory
 )
@@ -138,6 +142,7 @@ $deployment = New-AzResourceGroupDeployment `
         syncRuleId                             = $SyncRuleId
         syncOnRemoval                          = $SyncOnRemoval
         graphApiVersion                        = $GraphApiVersion
+        evaluationOutcome                      = $EvaluationOutcome
         includeAuthorizationHeaderInRunHistory = $IncludeAuthorizationHeaderInRunHistory.IsPresent
     }
 

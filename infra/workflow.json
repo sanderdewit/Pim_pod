@@ -41,6 +41,13 @@
         "metadata": {
           "description": "Microsoft Graph version used for provisionOnDemand."
         }
+      },
+      "evaluationOutcome": {
+        "type": "String",
+        "defaultValue": "Approved",
+        "metadata": {
+          "description": "Decision returned to PIM: 'Approved' (continue the normal PIM flow, including any human approval) or 'AutoApproved' (skip manual approval)."
+        }
       }
     },
     "triggers": {
@@ -77,8 +84,8 @@
             "Content-Type": "application/json"
           },
           "body": {
-            "evaluationId": "@{workflow()?['run']?['name']}",
-            "evaluationOutcome": "Approved",
+            "evaluationId": "@{guid()}",
+            "evaluationOutcome": "@{parameters('evaluationOutcome')}",
             "reason": [
               "Accepted by @{workflow()?['name']} (run @{workflow()?['run']?['name']}). Active Directory group sync is queued."
             ]

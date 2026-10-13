@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "7233443538923442665"
+      "templateHash": "659426834118840318"
     },
     "description": "Consumption Logic App used as a PIM for Groups (pre-approval) custom extension. Once PIM adds the member it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -76,6 +76,17 @@
         "description": "Microsoft Graph version used for provisionOnDemand."
       }
     },
+    "evaluationOutcome": {
+      "type": "string",
+      "defaultValue": "Approved",
+      "allowedValues": [
+        "Approved",
+        "AutoApproved"
+      ],
+      "metadata": {
+        "description": "Decision returned to PIM. Approved continues the normal PIM flow, including any human approval. AutoApproved skips manual approval, so only use it with a post-approval extension or for groups without required approval."
+      }
+    },
     "includeAuthorizationHeaderInRunHistory": {
       "type": "bool",
       "defaultValue": false,
@@ -126,6 +137,13 @@
           "defaultValue": "v1.0",
           "metadata": {
             "description": "Microsoft Graph version used for provisionOnDemand."
+          }
+        },
+        "evaluationOutcome": {
+          "type": "String",
+          "defaultValue": "Approved",
+          "metadata": {
+            "description": "Decision returned to PIM: 'Approved' (continue the normal PIM flow, including any human approval) or 'AutoApproved' (skip manual approval)."
           }
         }
       },
@@ -181,8 +199,8 @@
               "Content-Type": "application/json"
             },
             "body": {
-              "evaluationId": "@{workflow()?['run']?['name']}",
-              "evaluationOutcome": "Approved",
+              "evaluationId": "@{guid()}",
+              "evaluationOutcome": "@{parameters('evaluationOutcome')}",
               "reason": [
                 "Accepted by @{workflow()?['name']} (run @{workflow()?['run']?['name']}). Active Directory group sync is queued."
               ]
@@ -889,6 +907,9 @@
           },
           "graphApiVersion": {
             "value": "[parameters('graphApiVersion')]"
+          },
+          "evaluationOutcome": {
+            "value": "[parameters('evaluationOutcome')]"
           }
         }
       }

@@ -31,6 +31,13 @@ param syncOnRemoval bool = true
 ])
 param graphApiVersion string = 'v1.0'
 
+@description('Decision returned to PIM. Approved continues the normal PIM flow, including any human approval. AutoApproved skips manual approval, so only use it with a post-approval extension or for groups without required approval.')
+@allowed([
+  'Approved'
+  'AutoApproved'
+])
+param evaluationOutcome string = 'Approved'
+
 @description('Troubleshooting only: include the Authorization header in the trigger outputs (run history) so you can inspect the token PIM sends.')
 param includeAuthorizationHeaderInRunHistory bool = false
 
@@ -104,6 +111,9 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
       }
       graphApiVersion: {
         value: graphApiVersion
+      }
+      evaluationOutcome: {
+        value: evaluationOutcome
       }
     }
   }

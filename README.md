@@ -30,10 +30,8 @@ away and then every 5 seconds, and calls provisionOnDemand as soon as the user i
 checks once a minute, for up to 24 hours, which covers human approvals and activations scheduled to start
 later.
 
-**Use pre-approval, not post-approval.** For pre-approval, Microsoft documents the reply: `Approved` means
-"continue through the normal PIM workflow, including any approval steps". Post-approval isn't documented
-yet. In testing, PIM didn't accept the same reply for post-approval and kept the activation on hold, so the
-user was never added to the group.
+Pre-approval is the documented setup. A post-approval extension may also work with a different reply;
+see [Which reply to send PIM](#which-reply-to-send-pim).
 
 ## Do I need an app registration?
 
@@ -85,6 +83,7 @@ The defaults already contain your job:
 | `-SyncRuleId` | `auto`, so the Logic App looks it up from the job schema on each run |
 | `-SyncOnRemoval` | `$true`, which also syncs the removal when the user leaves the group |
 | `-GraphApiVersion` | `v1.0` (`beta` also works) |
+| `-EvaluationOutcome` | `Approved`. See [Which reply to send PIM](#which-reply-to-send-pim) |
 
 > The URL you have ends in `/restart`. **Don't call that from the Logic App.** Restart clears the job state
 > and forces a full sync. The Logic App calls `/provisionOnDemand` on the same job, and that call syncs only
@@ -157,6 +156,21 @@ Then link the extension to the group: **PIM > Groups > *your group* > Settings >
 post-approval custom extension off. Only the `member` role needs it, because Cloud Sync writes
 `members` to AD and not owners. The Logic App ignores owner activations.
 
+## Which reply to send PIM
+
+The Logic App answers PIM with `evaluationId` (a new GUID), `evaluationOutcome` (the `evaluationOutcome`
+parameter) and a `reason` that names the Logic App run.
+
+| Extension type | `evaluationOutcome` | Effect |
+|---|---|---|
+| Pre-approval | `Approved` (default) | Documented. PIM continues its normal flow, **including** any human approval, then adds the user. |
+| Pre-approval | `AutoApproved` | PIM skips manual approval. Only use this for groups that don't require approval. |
+| Post-approval | `Approved` | Not documented. In testing (with the run name as `evaluationId`), PIM kept the activation on hold. |
+| Post-approval | `AutoApproved` | Not documented, untested. Human approval has already happened at this stage, so this doesn't skip it. |
+
+To change the reply in the portal, set `defaultValue` of `evaluationOutcome` in code view. With the script,
+pass `-EvaluationOutcome AutoApproved`.
+
 ## Verify
 
 1. Activate the group membership as an eligible user.
@@ -195,7 +209,7 @@ AD. It can't grant access.
 
 | Symptom | Cause |
 |---|---|
-| The activation stays pending and the user is never added | The extension is linked as **post-approval**. Link it as pre-approval instead (see above). |
+| The activation stays pending and the user is never added | PIM doesn't accept the reply. With a post-approval extension, try `evaluationOutcome` = `AutoApproved`, or link the extension as pre-approval. See [Which reply to send PIM](#which-reply-to-send-pim). The PIM audit log (**Entra admin center > Audit logs**, service **PIM**) may show why. |
 | No run appears after an activation | PIM got a 401. Check that the app registration issues v2.0 tokens (`requestedAccessTokenVersion = 2`), that the Application ID URI host matches the endpoint host, and that the endpoint URL has no `sig`. |
 | `Terminate_invalid_payload` | The request body isn't the documented `privilegedAccessGroupAssignmentScheduleRequest` shape. Look at the trigger body and adjust `Parse_request`. |
 | `GraphLookupFailed`, or `Provision_on_demand` returns 403 | The run stops at the first failed Graph call and shows its status code and message. A 403 means the managed identity is missing a Graph permission. Grants can take a while to apply, because managed identity tokens are cached for up to 24 hours. |
