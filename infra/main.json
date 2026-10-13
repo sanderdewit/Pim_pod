@@ -5,9 +5,9 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "10025558838472095870"
+      "templateHash": "7233443538923442665"
     },
-    "description": "Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
+    "description": "Consumption Logic App used as a PIM for Groups (pre-approval) custom extension. Once PIM adds the member it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
   "parameters": {
     "logicAppName": {

@@ -1,4 +1,4 @@
-metadata description = 'Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately.'
+metadata description = 'Consumption Logic App used as a PIM for Groups (pre-approval) custom extension. Once PIM adds the member it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately.'
 
 @description('Name of the Logic App.')
 param logicAppName string = 'LA-PIM-JIT'

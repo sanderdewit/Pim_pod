@@ -1,7 +1,7 @@
 #Requires -Modules Az.Accounts, Az.Resources, Microsoft.Graph.Authentication
 <#
 .SYNOPSIS
-    Deploys LA-PIM-JIT: a Logic App that runs as a PIM for Groups (post-approval) custom extension and
+    Deploys LA-PIM-JIT: a Logic App that runs as a PIM for Groups (pre-approval) custom extension and
     calls Entra Cloud Sync provisionOnDemand for the activated member.
 
 .DESCRIPTION
@@ -180,12 +180,12 @@ foreach ($permission in $graphPermissions) {
 # --- 5. Values for the PIM custom extension -------------------------------------------------------
 Write-Host ''
 Write-Host 'Create the custom extension in Entra admin center > ID Governance > Privileged Identity Management > Custom extensions:' -ForegroundColor Green
-Write-Host '  Basics              Resource type: Microsoft Entra Groups, Custom extension type: Post-approval'
+Write-Host '  Basics              Resource type: Microsoft Entra Groups, Custom extension type: Pre-approval'
 Write-Host "  Endpoint            $targetUrl"
 Write-Host "  API authentication  $AppRegistrationName (app ID $($app.appId))"
 Write-Host "                      Application ID URI: $appIdUri"
 Write-Host ''
-Write-Host 'Then link it in PIM > Groups > <group> > Settings > Member > Edit.'
+Write-Host 'Then link it in PIM > Groups > <group> > Settings > Member > Edit > Require pre-approval custom extension to activate.'
 
 [pscustomobject]@{
     LogicAppName      = $LogicAppName

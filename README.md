@@ -1,17 +1,20 @@
 # LA-PIM-JIT: just-in-time AD group sync for PIM for Groups
 
-A Logic App that runs as a **post-approval PIM custom extension** for **Microsoft Entra Groups**.
+A Logic App that runs as a **pre-approval PIM custom extension** for **Microsoft Entra Groups**.
 When someone activates a PIM group membership, it calls the Cloud Sync
 [`provisionOnDemand`](https://learn.microsoft.com/en-us/graph/api/synchronization-synchronizationjob-provisionondemand)
 API, so the membership shows up in the on-premises AD group right away instead of on the next sync cycle.
 
 ```
 User activates group membership in PIM
-        │  (approval, if the role setting requires it)
+        │
         ▼
-PIM calls the post-approval custom extension ── Bearer token for the app registration ──►  Logic App LA-PIM-JIT
+PIM calls the pre-approval custom extension ── Bearer token for the app registration ──►  Logic App LA-PIM-JIT
+        ▲                                                                                   │
+        └─── 1. Replies 200 "Approved" straight away ───────────────────────────────────────┤
+PIM continues its normal flow: human approval if required,                                  │
+then PIM adds the user to the group                                                         │
                                                                                             │
-  1. Replies 200 "Approved" straight away, so PIM never waits on the sync                   │
   2. Checks every 5 seconds until the user is a member of the group (checkMemberGroups)     │ managed identity
   3. POST …/synchronization/jobs/{jobId}/provisionOnDemand  (the group + the activated user)  ├──► Microsoft Graph ──► Cloud Sync ──► AD group
   4. Optional: checks every minute until the user has left the group (expired or            │
@@ -21,10 +24,16 @@ PIM calls the post-approval custom extension ── Bearer token for the app reg
 This replaces the regular Cloud Sync cycle (every 20 minutes) for the activated user: the membership
 reaches AD within seconds of PIM adding the user to the group.
 
-Step 2 is the only wait before the sync. PIM calls the extension when the request is approved, which can
-be before PIM has added the user to the group. The Logic App checks the group membership itself, right
+Step 2 is the only wait before the sync. PIM calls a pre-approval extension when the user submits the
+activation, before PIM adds the user to the group. The Logic App checks the group membership itself, right
 away and then every 5 seconds, and calls provisionOnDemand as soon as the user is in. After 10 minutes it
-checks once a minute, for up to 24 hours, which covers activations scheduled to start later.
+checks once a minute, for up to 24 hours, which covers human approvals and activations scheduled to start
+later.
+
+**Use pre-approval, not post-approval.** For pre-approval, Microsoft documents the reply: `Approved` means
+"continue through the normal PIM workflow, including any approval steps". Post-approval isn't documented
+yet. In testing, PIM didn't accept the same reply for post-approval and kept the activation on hold, so the
+user was never added to the group.
 
 ## Do I need an app registration?
 
@@ -137,14 +146,15 @@ Use these steps instead of the script if you'd rather click through it yourself.
 Go to **Entra admin center > ID Governance > Privileged Identity Management > Custom extensions >
 Create a custom extension**.
 
-1. **Basics**: Name `LA-PIM-JIT`, Resource type **Microsoft Entra Groups**, Custom extension type **Post-approval**.
+1. **Basics**: Name `LA-PIM-JIT`, Resource type **Microsoft Entra Groups**, Custom extension type **Pre-approval**.
 2. **Endpoint configuration**: Target URL = the `Endpoint` value printed by the script. The Logic App
    replies within about a second, so the default timeout is fine.
 3. **API authentication**: select the app registration `LA-PIM-JIT PIM custom extension`.
 4. **Review + create**.
 
-Then link the extension to the group: **PIM > Groups > *your group* > Settings > Member > Edit**, select the
-post-approval custom extension, and **Save**. Only the `member` role needs it, because Cloud Sync writes
+Then link the extension to the group: **PIM > Groups > *your group* > Settings > Member > Edit**, select
+**Require pre-approval custom extension to activate**, pick `LA-PIM-JIT`, and **Save**. Leave the
+post-approval custom extension off. Only the `member` role needs it, because Cloud Sync writes
 `members` to AD and not owners. The Logic App ignores owner activations.
 
 ## Verify
@@ -185,8 +195,9 @@ AD. It can't grant access.
 
 | Symptom | Cause |
 |---|---|
+| The activation stays pending and the user is never added | The extension is linked as **post-approval**. Link it as pre-approval instead (see above). |
 | No run appears after an activation | PIM got a 401. Check that the app registration issues v2.0 tokens (`requestedAccessTokenVersion = 2`), that the Application ID URI host matches the endpoint host, and that the endpoint URL has no `sig`. |
-| `Terminate_invalid_payload` | The request body isn't the documented `privilegedAccessGroupAssignmentScheduleRequest` shape. Post-approval is a preview feature. Look at the trigger body and adjust `Parse_request`. |
+| `Terminate_invalid_payload` | The request body isn't the documented `privilegedAccessGroupAssignmentScheduleRequest` shape. Look at the trigger body and adjust `Parse_request`. |
 | `GraphLookupFailed`, or `Provision_on_demand` returns 403 | The run stops at the first failed Graph call and shows its status code and message. A 403 means the managed identity is missing a Graph permission. Grants can take a while to apply, because managed identity tokens are cached for up to 24 hours. |
 | `SyncRuleNotFound` | The job schema has no group rule, or more than one. Look at the `Get_sync_schema` output, then set the `syncRuleId` parameter to the right `synchronizationRules[].id`. |
 | `MemberNotAdded` | The user wasn't in the group within 24 hours of approval, for example because the activation was cancelled. Compare `groupId` and `principalId` in `Parse_request` with the real object IDs. |
@@ -195,10 +206,8 @@ AD. It can't grant access.
 
 ## Notes and limits
 
-- PIM post-approval extensions aren't in Microsoft's public docs yet, which so far only cover pre-approval.
-  This Logic App assumes post-approval sends the same request body and accepts the same response
-  (`evaluationId`, `evaluationOutcome`, `reason`). It always answers `Approved`, so it can never block or
-  auto-approve an activation.
+- The Logic App always answers `Approved` (never `AutoApproved` or `Denied`), so it never blocks an
+  activation and never skips a required human approval. PIM custom extensions are a preview feature.
 - The membership check (`checkMemberGroups`) is transitive. A user who is also a member through a nested
   group counts as a member before PIM adds them, and after the activation ends.
 - `provisionOnDemand` accepts one group with up to five members per call. The Logic App sends one group and
