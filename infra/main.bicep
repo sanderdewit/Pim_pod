@@ -57,7 +57,8 @@ var tokenClaims = concat(
       ]
 )
 
-var workflowDefinition = loadJsonContent('workflow.json')
+// workflow.json is the full code view document; only its definition is deployed here.
+var workflowDefinition = loadJsonContent('workflow.json', '$.definition')
 
 resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   name: logicAppName

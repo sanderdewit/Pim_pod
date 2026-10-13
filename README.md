@@ -39,7 +39,7 @@ managed identity.
 
 | Path | What it is |
 |---|---|
-| `infra/workflow.json` | Logic App workflow definition. See [Manual setup in the portal](#manual-setup-in-the-portal) to paste it into the code view. |
+| `infra/workflow.json` | The complete Logic App code view document (`definition` + `parameters`). Paste it as is, see [Manual setup in the portal](#manual-setup-in-the-portal). |
 | `infra/main.bicep` | Consumption Logic App with managed identity and Entra ID OAuth authorization policy |
 | `infra/main.json` | ARM template compiled from `main.bicep`. The script deploys this, so you don't need the Bicep CLI. |
 | `scripts/Deploy-PimJitLogicApp.ps1` | End-to-end deployment: app registration, Logic App, Application ID URI, Graph permissions |
@@ -96,10 +96,11 @@ Use these steps instead of the script if you'd rather click through it yourself.
 2. **Turn on the managed identity first.** Go to **Settings > Identity > System assigned > On**, **Save**, and
    copy the **Object (principal) ID**. The HTTP actions authenticate with this identity, so the workflow
    won't save until it's on.
-3. **Paste the workflow.** Open **Logic app code view**. It shows `{ "definition": { … }, "parameters": { … } }`.
-   Replace only the `definition` object with the contents of `infra/workflow.json`. Leave the outer
-   `parameters` block (`$connections`) as it is, then **Save**. The defaults contain your service principal and
-   job IDs. Leave `syncRuleId` empty, so the run looks the rule up from the job schema.
+3. **Paste the workflow.** Open **Logic app code view**, select everything (Ctrl+A), and replace it with the
+   complete contents of `infra/workflow.json`, then **Save**. Don't merge it with what the code view
+   already shows: duplicate `triggers` or `parameters` keys make the save fail. The defaults contain your
+   service principal and job IDs. Leave `syncRuleId` as `""`, so the run looks the rule up from the job
+   schema. It's a rule ID, not an on/off switch.
 4. **Grant Graph permissions to the managed identity.** The portal can't do this step, so use PowerShell
    with the `Microsoft.Graph.Applications` module:
 
