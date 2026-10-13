@@ -171,6 +171,12 @@ parameter) and a `reason` that names the Logic App run.
 To change the reply in the portal, set `defaultValue` of `evaluationOutcome` in code view. With the script,
 pass `-EvaluationOutcome AutoApproved`.
 
+What a post-approval call looks like (observed, see `samples/pim-group-activation-request.json`): the
+documented request fields (`id`, `action` such as `SelfActivate`, `principalId`, `groupId`, `accessId`,
+`scheduleInfo`, `ticketInfo`) plus `status` = `PendingPostApprovalCustomExtension`, `targetSchedule`,
+`activatedUsing`, `principal` and `group`. There's no callback URL, so PIM expects its decision in the
+HTTP response. The `x-ms-client-request-id` header is the PIM request `id`.
+
 ## Verify
 
 1. Activate the group membership as an eligible user.
