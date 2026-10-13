@@ -39,7 +39,7 @@ managed identity.
 
 | Path | What it is |
 |---|---|
-| `infra/workflow.json` | Logic App workflow definition. You can also paste it into the Logic App code view. |
+| `infra/workflow.json` | Logic App workflow definition. See [Manual setup in the portal](#manual-setup-in-the-portal) to paste it into the code view. |
 | `infra/main.bicep` | Consumption Logic App with managed identity and Entra ID OAuth authorization policy |
 | `infra/main.json` | ARM template compiled from `main.bicep`. The script deploys this, so you don't need the Bicep CLI. |
 | `scripts/Deploy-PimJitLogicApp.ps1` | End-to-end deployment: app registration, Logic App, Application ID URI, Graph permissions |
@@ -68,7 +68,7 @@ The defaults already contain your job:
 |---|---|
 | `-SyncServicePrincipalId` | `7dc02c72-03d1-462b-bf75-335fbffaa19e` |
 | `-SyncJobId` | `AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903` |
-| `-SyncRuleId` | Looked up from the job schema, so you normally leave it out |
+| `-SyncRuleId` | Empty, so the Logic App looks it up from the job schema on each run |
 | `-SyncOnExpiry` | `$true`, which also syncs the removal when the activation ends |
 | `-GraphApiVersion` | `v1.0` (`beta` also works) |
 
@@ -87,6 +87,43 @@ API authentication  LA-PIM-JIT PIM custom extension (app ID <appId>)
 The endpoint URL deliberately has **no `sig=` parameter**. A Logic App rejects requests that carry both
 a SAS signature and a bearer token. Without `sig`, it accepts only Entra ID tokens that match the
 authorization policy.
+
+## Manual setup in the portal
+
+Use these steps instead of the script if you'd rather click through it yourself.
+
+1. **Create the Logic App** with plan type **Consumption**.
+2. **Paste the workflow.** Open **Logic app code view**. It shows `{ "definition": { … }, "parameters": { } }`.
+   Replace only the `definition` object with the contents of `infra/workflow.json`, then **Save**. Every
+   workflow parameter has a default value, so `parameters` can stay empty. The defaults contain your service
+   principal and job IDs. `syncRuleId` is empty, so the run looks the rule up from the job schema.
+3. **Turn on the managed identity.** Go to **Settings > Identity > System assigned > On** and copy the
+   **Object (principal) ID**.
+4. **Grant Graph permissions to the managed identity.** The portal can't do this step, so use PowerShell
+   with the `Microsoft.Graph.Applications` module:
+
+   ```powershell
+   Connect-MgGraph -Scopes AppRoleAssignment.ReadWrite.All, Application.Read.All
+   $mi = '<Object (principal) ID of the managed identity>'
+   $graphSp = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
+   foreach ($permission in 'Synchronization.ReadWrite.All', 'PrivilegedAssignmentSchedule.Read.AzureADGroup') {
+       $role = $graphSp.AppRoles | Where-Object { $_.Value -eq $permission -and $_.AllowedMemberTypes -contains 'Application' }
+       New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $mi -PrincipalId $mi -ResourceId $graphSp.Id -AppRoleId $role.Id
+   }
+   ```
+
+5. **Get the endpoint URL.** Open the designer, select the trigger **When a HTTP request is received**, and
+   copy the **HTTP URL**. Remove the `&sig=…` part and the `:443`. You now have the target URL:
+   `https://prod-NN.<region>.logic.azure.com/workflows/<id>/triggers/manual/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0`
+6. **Create the app registration.** Go to **Entra admin center > App registrations > New registration**,
+   choose single tenant, and leave the redirect URI empty. Then:
+   - In **Manifest**, set `requestedAccessTokenVersion` to `2`.
+   - In **Expose an API**, set the Application ID URI to `api://<host of the target URL>/<Application (client) ID>`,
+     for example `api://prod-12.westeurope.logic.azure.com/00001111-aaaa-2222-bbbb-3333cccc4444`.
+7. **Add the authorization policy.** In the Logic App, go to **Settings > Authorization > Add policy** and
+   choose policy type **AAD** with these claims:
+   - **Issuer**: `https://login.microsoftonline.com/<tenant ID>/v2.0`
+   - **Audience**: the app registration's **Application (client) ID**
 
 ## Create the custom extension in PIM
 
@@ -144,6 +181,7 @@ AD. It can't grant access.
 | No run appears after an activation | PIM got a 401. Check that the app registration issues v2.0 tokens (`requestedAccessTokenVersion = 2`), that the Application ID URI host matches the endpoint host, and that the endpoint URL has no `sig`. |
 | `Terminate_invalid_payload` | The request body isn't the documented `privilegedAccessGroupAssignmentScheduleRequest` shape. Post-approval is a preview feature. Look at the trigger body and adjust `Parse_request`. |
 | `Get_assignment_instances` or `Provision_on_demand` returns 403 | The managed identity is missing a Graph permission. Grants can take a while to apply, because managed identity tokens are cached for up to 24 hours. |
+| `SyncRuleNotFound` | The job schema has no group rule, or more than one. Look at the `Get_sync_schema` output, then set the `syncRuleId` parameter to the right `synchronizationRules[].id`. |
 | `AssignmentNotActive` | The activation wasn't active within 1 hour of approval, for example because it was cancelled. |
 | `ProvisionOnDemandFailed`, or `Skipped` with an error code | Check the group is in scope of the Cloud Sync configuration and the user exists in AD. Run **Provision on demand** for the same group and user in the Cloud Sync portal to see the detailed steps. |
 | HTTP 429 | `provisionOnDemand` is limited to 5 requests per 10 seconds. The HTTP actions retry automatically. |

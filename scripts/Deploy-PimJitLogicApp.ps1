@@ -5,14 +5,13 @@
     calls Entra Cloud Sync provisionOnDemand for the activated member.
 
 .DESCRIPTION
-    1. Looks up the group synchronization rule ID in the Cloud Sync job schema (unless -SyncRuleId is given).
-    2. Creates (or reuses) the app registration PIM requests a token for, set to issue v2.0 tokens.
-    3. Deploys the Consumption Logic App with a system-assigned managed identity and an Entra ID OAuth
+    1. Creates (or reuses) the app registration PIM requests a token for, set to issue v2.0 tokens.
+    2. Deploys the Consumption Logic App with a system-assigned managed identity and an Entra ID OAuth
        authorization policy (infra/main.json, compiled from infra/main.bicep).
-    4. Sets the app registration's Application ID URI to api://<logic app host>/<appId>
+    3. Sets the app registration's Application ID URI to api://<logic app host>/<appId>
        (PIM requires the host to match the host of the endpoint URL).
-    5. Grants the managed identity the Microsoft Graph application permissions it needs.
-    6. Prints the values to enter when you create the custom extension in PIM.
+    4. Grants the managed identity the Microsoft Graph application permissions it needs.
+    5. Prints the values to enter when you create the custom extension in PIM.
 
     Run as a Global Administrator or Privileged Role Administrator with Contributor on the resource group.
 
@@ -41,8 +40,8 @@ param(
 
     [string] $SyncJobId = 'AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903',
 
-    # Leave empty to look it up from the job schema.
-    [string] $SyncRuleId,
+    # Leave empty to let the Logic App look it up from the job schema at run time.
+    [string] $SyncRuleId = '',
 
     # Application ID in the azp claim of the token PIM sends. Leave empty until you have confirmed it.
     [string] $PimCallerAppId = '',
@@ -61,7 +60,7 @@ $ErrorActionPreference = 'Stop'
 $graph = 'https://graph.microsoft.com'
 $graphAppId = '00000003-0000-0000-c000-000000000000'
 $graphPermissions = @(
-    'Synchronization.ReadWrite.All',                  # provisionOnDemand on the Cloud Sync job
+    'Synchronization.ReadWrite.All',                  # read the job schema, provisionOnDemand
     'PrivilegedAssignmentSchedule.Read.AzureADGroup'  # wait until the PIM activation is active / ended
 )
 
@@ -91,25 +90,11 @@ $context = Set-AzContext -Subscription $SubscriptionId
 $tenantId = $context.Tenant.Id
 
 Connect-MgGraph -TenantId $tenantId -NoWelcome -Scopes @(
-    'Application.ReadWrite.All',       # create the app registration
-    'AppRoleAssignment.ReadWrite.All', # grant Graph permissions to the managed identity
-    'Synchronization.Read.All'         # read the Cloud Sync job schema
+    'Application.ReadWrite.All',      # create the app registration
+    'AppRoleAssignment.ReadWrite.All' # grant Graph permissions to the managed identity
 )
 
-# --- 1. Group synchronization rule ----------------------------------------------------------------
-if (-not $SyncRuleId) {
-    Write-Host 'Looking up the group synchronization rule of the Cloud Sync job...'
-    $schema = Invoke-Graph -Path "v1.0/servicePrincipals/$SyncServicePrincipalId/synchronization/jobs/$SyncJobId/schema"
-    $groupRules = @($schema.synchronizationRules | Where-Object { $_.objectMappings.sourceObjectName -contains 'Group' })
-    if ($groupRules.Count -ne 1) {
-        $schema.synchronizationRules | Format-Table id, name | Out-String | Write-Host
-        throw "Found $($groupRules.Count) synchronization rules for groups. Pass the right one with -SyncRuleId."
-    }
-    $SyncRuleId = $groupRules[0].id
-}
-Write-Host "Sync rule ID: $SyncRuleId"
-
-# --- 2. App registration that secures the endpoint ------------------------------------------------
+# --- 1. App registration that secures the endpoint ------------------------------------------------
 $app = (Invoke-Graph -Path "v1.0/applications?$(ConvertTo-ODataFilter "displayName eq '$AppRegistrationName'")").value |
     Select-Object -First 1
 if (-not $app) {
@@ -132,7 +117,7 @@ if (-not $appSp) {
     Invoke-Graph -Method POST -Path 'v1.0/servicePrincipals' -Body @{ appId = $app.appId } | Out-Null
 }
 
-# --- 3. Logic App ---------------------------------------------------------------------------------
+# --- 2. Logic App ---------------------------------------------------------------------------------
 if (-not (Get-AzResourceGroup -Name $ResourceGroupName -ErrorAction SilentlyContinue)) {
     New-AzResourceGroup -Name $ResourceGroupName -Location $Location | Out-Null
 }
@@ -159,10 +144,10 @@ $targetUrl = $deployment.Outputs['customExtensionTargetUrl'].Value
 $appIdUri = $deployment.Outputs['applicationIdUri'].Value
 $miObjectId = $deployment.Outputs['logicAppPrincipalId'].Value
 
-# --- 4. Application ID URI (host must match the endpoint host) ------------------------------------
+# --- 3. Application ID URI (host must match the endpoint host) ------------------------------------
 Invoke-Graph -Method PATCH -Path "v1.0/applications/$($app.id)" -Body @{ identifierUris = @($appIdUri) } | Out-Null
 
-# --- 5. Graph permissions for the managed identity ------------------------------------------------
+# --- 4. Graph permissions for the managed identity ------------------------------------------------
 $graphSp = (Invoke-Graph -Path "v1.0/servicePrincipals?$(ConvertTo-ODataFilter "appId eq '$graphAppId'")").value |
     Select-Object -First 1
 
@@ -191,7 +176,7 @@ foreach ($permission in $graphPermissions) {
     Write-Host "Granted $permission to the managed identity."
 }
 
-# --- 6. Values for the PIM custom extension -------------------------------------------------------
+# --- 5. Values for the PIM custom extension -------------------------------------------------------
 Write-Host ''
 Write-Host 'Create the custom extension in Entra admin center > ID Governance > Privileged Identity Management > Custom extensions:' -ForegroundColor Green
 Write-Host '  Basics              Resource type: Microsoft Entra Groups, Custom extension type: Post-approval'
@@ -208,5 +193,4 @@ Write-Host 'Then link it in PIM > Groups > <group> > Settings > Member > Edit.'
     AppId             = $app.appId
     ApplicationIdUri  = $appIdUri
     ManagedIdentityId = $miObjectId
-    SyncRuleId        = $SyncRuleId
 }

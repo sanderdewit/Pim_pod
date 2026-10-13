@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "4227498468415808943"
+      "templateHash": "12930603347299644752"
     },
     "description": "Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -53,8 +53,9 @@
     },
     "syncRuleId": {
       "type": "string",
+      "defaultValue": "",
       "metadata": {
-        "description": "ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id)."
+        "description": "ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). Leave empty to look it up at run time."
       }
     },
     "syncOnExpiry": {
@@ -90,20 +91,23 @@
       "parameters": {
         "syncServicePrincipalId": {
           "type": "String",
+          "defaultValue": "7dc02c72-03d1-462b-bf75-335fbffaa19e",
           "metadata": {
             "description": "Object ID of the Cloud Sync service principal that owns the provisioning job."
           }
         },
         "syncJobId": {
           "type": "String",
+          "defaultValue": "AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903",
           "metadata": {
             "description": "ID of the Entra ID to AD group provisioning job (AAD2ADGroupProvisioning.*)."
           }
         },
         "syncRuleId": {
           "type": "String",
+          "defaultValue": "",
           "metadata": {
-            "description": "ID of the group synchronization rule in the job schema."
+            "description": "ID of the group synchronization rule in the job schema. Leave empty to look it up at run time."
           }
         },
         "syncOnExpiry": {
@@ -216,9 +220,26 @@
             ]
           }
         },
-        "Validate_request": {
+        "Initialize_syncRuleId": {
           "runAfter": {
             "Initialize_activeAssignments": [
+              "Succeeded"
+            ]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "syncRuleId",
+                "type": "string",
+                "value": "@parameters('syncRuleId')"
+              }
+            ]
+          }
+        },
+        "Validate_request": {
+          "runAfter": {
+            "Initialize_syncRuleId": [
               "Succeeded"
             ]
           },
@@ -300,9 +321,104 @@
             "actions": {}
           }
         },
-        "Wait_for_scheduled_start": {
+        "Look_up_sync_rule": {
           "runAfter": {
             "Skip_if_not_member_activation": [
+              "Succeeded"
+            ]
+          },
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@variables('syncRuleId')",
+                  ""
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Get_sync_schema": {
+              "runAfter": {},
+              "type": "Http",
+              "inputs": {
+                "method": "GET",
+                "uri": "https://graph.microsoft.com/@{parameters('graphApiVersion')}/servicePrincipals/@{parameters('syncServicePrincipalId')}/synchronization/jobs/@{parameters('syncJobId')}/schema",
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "https://graph.microsoft.com"
+                }
+              }
+            },
+            "Filter_group_rules": {
+              "runAfter": {
+                "Get_sync_schema": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Query",
+              "inputs": {
+                "from": "@coalesce(body('Get_sync_schema')?['synchronizationRules'], json('[]'))",
+                "where": "@contains(toLower(string(coalesce(item()?['objectMappings'], json('[]')))), '\"sourceobjectname\":\"group\"')"
+              }
+            },
+            "Fail_if_no_single_group_rule": {
+              "runAfter": {
+                "Filter_group_rules": [
+                  "Succeeded"
+                ]
+              },
+              "type": "If",
+              "expression": {
+                "and": [
+                  {
+                    "not": {
+                      "equals": [
+                        "@length(body('Filter_group_rules'))",
+                        1
+                      ]
+                    }
+                  }
+                ]
+              },
+              "actions": {
+                "Terminate_no_group_rule": {
+                  "runAfter": {},
+                  "type": "Terminate",
+                  "inputs": {
+                    "runStatus": "Failed",
+                    "runError": {
+                      "code": "SyncRuleNotFound",
+                      "message": "Found @{length(body('Filter_group_rules'))} group synchronization rules in the job schema. Set the syncRuleId parameter to the right one (see the output of Get_sync_schema)."
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {}
+              }
+            },
+            "Set_syncRuleId": {
+              "runAfter": {
+                "Fail_if_no_single_group_rule": [
+                  "Succeeded"
+                ]
+              },
+              "type": "SetVariable",
+              "inputs": {
+                "name": "syncRuleId",
+                "value": "@{first(body('Filter_group_rules'))?['id']}"
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          }
+        },
+        "Wait_for_scheduled_start": {
+          "runAfter": {
+            "Look_up_sync_rule": [
               "Succeeded"
             ]
           },
@@ -485,7 +601,7 @@
             "body": {
               "parameters": [
                 {
-                  "ruleId": "@{parameters('syncRuleId')}",
+                  "ruleId": "@{variables('syncRuleId')}",
                   "subjects": [
                     {
                       "objectId": "@{outputs('Parse_request')?['groupId']}",
@@ -716,7 +832,7 @@
                 "body": {
                   "parameters": [
                     {
-                      "ruleId": "@{parameters('syncRuleId')}",
+                      "ruleId": "@{variables('syncRuleId')}",
                       "subjects": [
                         {
                           "objectId": "@{outputs('Parse_request')?['groupId']}",
