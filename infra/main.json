@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "6933222374148747151"
+      "templateHash": "10025558838472095870"
     },
     "description": "Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -58,11 +58,11 @@
         "description": "ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). \"auto\" looks it up at run time."
       }
     },
-    "syncOnExpiry": {
+    "syncOnRemoval": {
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Run provisionOnDemand again after the activation ends, so the membership is also removed from AD promptly."
+        "description": "Run provisionOnDemand again when the user leaves the group (activation expired or deactivated), so the AD membership is removed promptly."
       }
     },
     "graphApiVersion": {
@@ -114,11 +114,11 @@
             "description": "ID of the group synchronization rule in the job schema. 'auto' looks it up at run time."
           }
         },
-        "syncOnExpiry": {
+        "syncOnRemoval": {
           "type": "Bool",
           "defaultValue": true,
           "metadata": {
-            "description": "Run provisionOnDemand again after the activation ends, so the membership is also removed from AD promptly."
+            "description": "Run provisionOnDemand again when the user leaves the group (activation expired or deactivated), so the AD membership is removed promptly."
           }
         },
         "graphApiVersion": {
@@ -206,7 +206,7 @@
             "accessId": "@{toLower(coalesce(triggerBody()?['accessId'], 'member'))}"
           }
         },
-        "Initialize_activeAssignments": {
+        "Initialize_isMember": {
           "runAfter": {
             "Parse_request": [
               "Succeeded"
@@ -216,16 +216,16 @@
           "inputs": {
             "variables": [
               {
-                "name": "activeAssignments",
-                "type": "array",
-                "value": []
+                "name": "isMember",
+                "type": "boolean",
+                "value": false
               }
             ]
           }
         },
         "Initialize_syncRuleId": {
           "runAfter": {
-            "Initialize_activeAssignments": [
+            "Initialize_isMember": [
               "Succeeded"
             ]
           },
@@ -442,27 +442,32 @@
             "actions": {}
           }
         },
-        "Until_assignment_active": {
+        "Until_member_added": {
           "runAfter": {
             "Look_up_sync_rule": [
               "Succeeded"
             ]
           },
           "type": "Until",
-          "expression": "@or(greater(length(variables('activeAssignments')), 0), not(equals(variables('pollError'), '')))",
+          "expression": "@or(variables('isMember'), not(equals(variables('pollError'), '')))",
           "limit": {
             "count": 5000,
             "timeout": "PT24H"
           },
           "actions": {
-            "Get_assignment_instances": {
+            "Check_membership": {
               "runAfter": {},
               "type": "Http",
               "inputs": {
-                "method": "GET",
-                "uri": "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleInstances",
-                "queries": {
-                  "$filter": "principalId eq '@{outputs('Parse_request')?['principalId']}'"
+                "method": "POST",
+                "uri": "https://graph.microsoft.com/v1.0/users/@{outputs('Parse_request')?['principalId']}/checkMemberGroups",
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "groupIds": [
+                    "@{outputs('Parse_request')?['groupId']}"
+                  ]
                 },
                 "authentication": {
                   "type": "ManagedServiceIdentity",
@@ -472,7 +477,7 @@
             },
             "Record_poll_error": {
               "runAfter": {
-                "Get_assignment_instances": [
+                "Check_membership": [
                   "Failed",
                   "TimedOut"
                 ]
@@ -480,36 +485,24 @@
               "type": "SetVariable",
               "inputs": {
                 "name": "pollError",
-                "value": "HTTP @{outputs('Get_assignment_instances')?['statusCode']}: @{coalesce(body('Get_assignment_instances')?['error']?['message'], string(body('Get_assignment_instances')))}"
+                "value": "HTTP @{outputs('Check_membership')?['statusCode']}: @{coalesce(body('Check_membership')?['error']?['message'], string(body('Check_membership')))}"
               }
             },
-            "Filter_group_instances": {
+            "Set_isMember": {
               "runAfter": {
-                "Get_assignment_instances": [
-                  "Succeeded"
-                ]
-              },
-              "type": "Query",
-              "inputs": {
-                "from": "@coalesce(body('Get_assignment_instances')?['value'], json('[]'))",
-                "where": "@and(equals(toLower(coalesce(item()?['groupId'], '')), outputs('Parse_request')?['groupId']), equals(toLower(coalesce(item()?['accessId'], '')), outputs('Parse_request')?['accessId']))"
-              }
-            },
-            "Set_activeAssignments": {
-              "runAfter": {
-                "Filter_group_instances": [
+                "Check_membership": [
                   "Succeeded"
                 ]
               },
               "type": "SetVariable",
               "inputs": {
-                "name": "activeAssignments",
-                "value": "@body('Filter_group_instances')"
+                "name": "isMember",
+                "value": "@contains(toLower(string(coalesce(body('Check_membership')?['value'], json('[]')))), outputs('Parse_request')?['groupId'])"
               }
             },
-            "Delay_if_not_yet_active": {
+            "Delay_if_not_member_yet": {
               "runAfter": {
-                "Set_activeAssignments": [
+                "Set_isMember": [
                   "Succeeded"
                 ]
               },
@@ -518,19 +511,19 @@
                 "and": [
                   {
                     "equals": [
-                      "@length(variables('activeAssignments'))",
-                      0
+                      "@variables('isMember')",
+                      false
                     ]
                   }
                 ]
               },
               "actions": {
-                "Delay_before_next_poll": {
+                "Delay_before_next_check": {
                   "runAfter": {},
                   "type": "Wait",
                   "inputs": {
                     "interval": {
-                      "count": "@if(less(iterationIndexes('Until_assignment_active'), 40), 15, 60)",
+                      "count": "@if(less(iterationIndexes('Until_member_added'), 120), 5, 60)",
                       "unit": "Second"
                     }
                   }
@@ -544,7 +537,7 @@
         },
         "Fail_if_lookup_failed": {
           "runAfter": {
-            "Until_assignment_active": [
+            "Until_member_added": [
               "Succeeded",
               "Failed",
               "TimedOut"
@@ -571,7 +564,7 @@
                 "runStatus": "Failed",
                 "runError": {
                   "code": "GraphLookupFailed",
-                  "message": "Reading PIM assignmentScheduleInstances failed with @{variables('pollError')}. A 403 means the managed identity lacks PrivilegedAssignmentSchedule.Read.AzureADGroup."
+                  "message": "Checking the group membership failed with @{variables('pollError')}. A 403 means the managed identity lacks GroupMember.Read.All or User.ReadBasic.All."
                 }
               }
             }
@@ -580,7 +573,7 @@
             "actions": {}
           }
         },
-        "Fail_if_not_active": {
+        "Fail_if_not_member": {
           "runAfter": {
             "Fail_if_lookup_failed": [
               "Succeeded"
@@ -591,21 +584,21 @@
             "and": [
               {
                 "equals": [
-                  "@length(variables('activeAssignments'))",
-                  0
+                  "@variables('isMember')",
+                  false
                 ]
               }
             ]
           },
           "actions": {
-            "Terminate_not_active": {
+            "Terminate_not_member": {
               "runAfter": {},
               "type": "Terminate",
               "inputs": {
                 "runStatus": "Failed",
                 "runError": {
-                  "code": "AssignmentNotActive",
-                  "message": "No active PIM '@{outputs('Parse_request')?['accessId']}' assignment for principal @{outputs('Parse_request')?['principalId']} in group @{outputs('Parse_request')?['groupId']} within 24 hours. Check that the activation wasn't cancelled and that Get_assignment_instances returns it."
+                  "code": "MemberNotAdded",
+                  "message": "User @{outputs('Parse_request')?['principalId']} did not become a member of group @{outputs('Parse_request')?['groupId']} within 24 hours. Check that the activation wasn't cancelled, and compare the IDs in Parse_request with the user and group."
                 }
               }
             }
@@ -616,7 +609,7 @@
         },
         "Provision_on_demand": {
           "runAfter": {
-            "Fail_if_not_active": [
+            "Fail_if_not_member": [
               "Succeeded"
             ]
           },
@@ -707,7 +700,7 @@
             "actions": {}
           }
         },
-        "Sync_again_on_expiry": {
+        "Sync_again_on_removal": {
           "runAfter": {
             "Fail_if_provisioning_failed": [
               "Succeeded"
@@ -718,51 +711,49 @@
             "and": [
               {
                 "equals": [
-                  "@parameters('syncOnExpiry')",
+                  "@parameters('syncOnRemoval')",
                   true
                 ]
-              },
-              {
-                "not": {
-                  "equals": [
-                    "@coalesce(first(variables('activeAssignments'))?['endDateTime'], '')",
-                    ""
-                  ]
-                }
               }
             ]
           },
           "actions": {
-            "Delay_until_expiry": {
+            "Until_member_removed": {
               "runAfter": {},
-              "type": "Wait",
-              "inputs": {
-                "until": {
-                  "timestamp": "@{if(greater(ticks(first(variables('activeAssignments'))?['endDateTime']), ticks(utcNow())), first(variables('activeAssignments'))?['endDateTime'], addMinutes(utcNow(), 1))}"
-                }
-              }
-            },
-            "Until_assignment_removed": {
-              "runAfter": {
-                "Delay_until_expiry": [
-                  "Succeeded"
-                ]
-              },
               "type": "Until",
-              "expression": "@or(equals(length(variables('activeAssignments')), 0), not(equals(variables('pollError'), '')))",
+              "expression": "@or(not(variables('isMember')), not(equals(variables('pollError'), '')))",
               "limit": {
-                "count": 60,
-                "timeout": "PT1H"
+                "count": 5000,
+                "timeout": "PT25H"
               },
               "actions": {
-                "Get_assignment_instances_after_expiry": {
+                "Delay_before_removal_check": {
                   "runAfter": {},
+                  "type": "Wait",
+                  "inputs": {
+                    "interval": {
+                      "count": 60,
+                      "unit": "Second"
+                    }
+                  }
+                },
+                "Check_membership_for_removal": {
+                  "runAfter": {
+                    "Delay_before_removal_check": [
+                      "Succeeded"
+                    ]
+                  },
                   "type": "Http",
                   "inputs": {
-                    "method": "GET",
-                    "uri": "https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleInstances",
-                    "queries": {
-                      "$filter": "principalId eq '@{outputs('Parse_request')?['principalId']}'"
+                    "method": "POST",
+                    "uri": "https://graph.microsoft.com/v1.0/users/@{outputs('Parse_request')?['principalId']}/checkMemberGroups",
+                    "headers": {
+                      "Content-Type": "application/json"
+                    },
+                    "body": {
+                      "groupIds": [
+                        "@{outputs('Parse_request')?['groupId']}"
+                      ]
                     },
                     "authentication": {
                       "type": "ManagedServiceIdentity",
@@ -770,9 +761,9 @@
                     }
                   }
                 },
-                "Record_poll_error_after_expiry": {
+                "Record_poll_error_for_removal": {
                   "runAfter": {
-                    "Get_assignment_instances_after_expiry": [
+                    "Check_membership_for_removal": [
                       "Failed",
                       "TimedOut"
                     ]
@@ -780,71 +771,26 @@
                   "type": "SetVariable",
                   "inputs": {
                     "name": "pollError",
-                    "value": "HTTP @{outputs('Get_assignment_instances_after_expiry')?['statusCode']}: @{coalesce(body('Get_assignment_instances_after_expiry')?['error']?['message'], string(body('Get_assignment_instances_after_expiry')))}"
+                    "value": "HTTP @{outputs('Check_membership_for_removal')?['statusCode']}: @{coalesce(body('Check_membership_for_removal')?['error']?['message'], string(body('Check_membership_for_removal')))}"
                   }
                 },
-                "Filter_group_instances_after_expiry": {
+                "Set_isMember_for_removal": {
                   "runAfter": {
-                    "Get_assignment_instances_after_expiry": [
-                      "Succeeded"
-                    ]
-                  },
-                  "type": "Query",
-                  "inputs": {
-                    "from": "@coalesce(body('Get_assignment_instances_after_expiry')?['value'], json('[]'))",
-                    "where": "@and(equals(toLower(coalesce(item()?['groupId'], '')), outputs('Parse_request')?['groupId']), equals(toLower(coalesce(item()?['accessId'], '')), outputs('Parse_request')?['accessId']))"
-                  }
-                },
-                "Set_activeAssignments_after_expiry": {
-                  "runAfter": {
-                    "Filter_group_instances_after_expiry": [
+                    "Check_membership_for_removal": [
                       "Succeeded"
                     ]
                   },
                   "type": "SetVariable",
                   "inputs": {
-                    "name": "activeAssignments",
-                    "value": "@body('Filter_group_instances_after_expiry')"
-                  }
-                },
-                "Delay_if_still_active": {
-                  "runAfter": {
-                    "Set_activeAssignments_after_expiry": [
-                      "Succeeded"
-                    ]
-                  },
-                  "type": "If",
-                  "expression": {
-                    "and": [
-                      {
-                        "greater": [
-                          "@length(variables('activeAssignments'))",
-                          0
-                        ]
-                      }
-                    ]
-                  },
-                  "actions": {
-                    "Delay_60_seconds": {
-                      "runAfter": {},
-                      "type": "Wait",
-                      "inputs": {
-                        "interval": {
-                          "count": 60,
-                          "unit": "Second"
-                        }
-                      }
-                    }
-                  },
-                  "else": {
-                    "actions": {}
+                    "name": "isMember",
+                    "value": "@contains(toLower(string(coalesce(body('Check_membership_for_removal')?['value'], json('[]')))), outputs('Parse_request')?['groupId'])"
                   }
                 }
               }
             },
-            "Provision_on_demand_after_expiry": {
+            "Provision_on_demand_after_removal": {
               "runAfter": {
-                "Until_assignment_removed": [
+                "Until_member_removed": [
                   "Succeeded",
                   "Failed",
                   "TimedOut"
@@ -884,14 +830,14 @@
                 }
               }
             },
-            "Provisioning_result_after_expiry": {
+            "Provisioning_result_after_removal": {
               "runAfter": {
-                "Provision_on_demand_after_expiry": [
+                "Provision_on_demand_after_removal": [
                   "Succeeded"
                 ]
               },
               "type": "Compose",
-              "inputs": "@json(coalesce(body('Provision_on_demand_after_expiry')?['key'], '{\"result\":\"Unknown\"}'))"
+              "inputs": "@json(coalesce(body('Provision_on_demand_after_removal')?['key'], '{\"result\":\"Unknown\"}'))"
             }
           },
           "else": {
@@ -938,8 +884,8 @@
           "syncRuleId": {
             "value": "[parameters('syncRuleId')]"
           },
-          "syncOnExpiry": {
-            "value": "[parameters('syncOnExpiry')]"
+          "syncOnRemoval": {
+            "value": "[parameters('syncOnRemoval')]"
           },
           "graphApiVersion": {
             "value": "[parameters('graphApiVersion')]"

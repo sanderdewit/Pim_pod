@@ -21,8 +21,8 @@ param syncJobId string = 'AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1
 @description('ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). "auto" looks it up at run time.')
 param syncRuleId string = 'auto'
 
-@description('Run provisionOnDemand again after the activation ends, so the membership is also removed from AD promptly.')
-param syncOnExpiry bool = true
+@description('Run provisionOnDemand again when the user leaves the group (activation expired or deactivated), so the AD membership is removed promptly.')
+param syncOnRemoval bool = true
 
 @description('Microsoft Graph version used for provisionOnDemand.')
 @allowed([
@@ -99,8 +99,8 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
       syncRuleId: {
         value: syncRuleId
       }
-      syncOnExpiry: {
-        value: syncOnExpiry
+      syncOnRemoval: {
+        value: syncOnRemoval
       }
       graphApiVersion: {
         value: graphApiVersion

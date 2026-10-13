@@ -46,7 +46,7 @@ param(
     # Application ID in the azp claim of the token PIM sends. Leave empty until you have confirmed it.
     [string] $PimCallerAppId = '',
 
-    [bool] $SyncOnExpiry = $true,
+    [bool] $SyncOnRemoval = $true,
 
     [ValidateSet('v1.0', 'beta')]
     [string] $GraphApiVersion = 'v1.0',
@@ -60,8 +60,9 @@ $ErrorActionPreference = 'Stop'
 $graph = 'https://graph.microsoft.com'
 $graphAppId = '00000003-0000-0000-c000-000000000000'
 $graphPermissions = @(
-    'Synchronization.ReadWrite.All',                  # read the job schema, provisionOnDemand
-    'PrivilegedAssignmentSchedule.Read.AzureADGroup'  # wait until the PIM activation is active / ended
+    'Synchronization.ReadWrite.All', # read the job schema, provisionOnDemand
+    'GroupMember.Read.All',          # check when the user joins / leaves the group
+    'User.ReadBasic.All'             # (checkMemberGroups on a user needs both)
 )
 
 function Invoke-Graph {
@@ -135,7 +136,7 @@ $deployment = New-AzResourceGroupDeployment `
         syncServicePrincipalId                 = $SyncServicePrincipalId
         syncJobId                              = $SyncJobId
         syncRuleId                             = $SyncRuleId
-        syncOnExpiry                           = $SyncOnExpiry
+        syncOnRemoval                          = $SyncOnRemoval
         graphApiVersion                        = $GraphApiVersion
         includeAuthorizationHeaderInRunHistory = $IncludeAuthorizationHeaderInRunHistory.IsPresent
     }

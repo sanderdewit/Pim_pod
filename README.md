@@ -12,17 +12,19 @@ User activates group membership in PIM
 PIM calls the post-approval custom extension ── Bearer token for the app registration ──►  Logic App LA-PIM-JIT
                                                                                             │
   1. Replies 200 "Approved" straight away, so PIM never waits on the sync                   │
-  2. Waits until the activation is active (polls PIM assignmentScheduleInstances)           │ managed identity
+  2. Checks every 5 seconds until the user is a member of the group (checkMemberGroups)     │ managed identity
   3. POST …/synchronization/jobs/{jobId}/provisionOnDemand  (the group + the activated user)  ├──► Microsoft Graph ──► Cloud Sync ──► AD group
-  4. Optional: waits until the activation ends, then runs provisionOnDemand again so the     │
-     user is also removed from the AD group right away                                       │
+  4. Optional: checks every minute until the user has left the group (expired or            │
+     deactivated), then runs provisionOnDemand again so AD drops the user right away         │
 ```
 
+This replaces the regular Cloud Sync cycle (every 20 minutes) for the activated user: the membership
+reaches AD within seconds of PIM adding the user to the group.
+
 Step 2 is the only wait before the sync. PIM calls the extension when the request is approved, which can
-be before PIM has added the user to the group. The Logic App checks right away, then every 15 seconds,
-and calls provisionOnDemand as soon as the activation is active. It never waits for the regular Cloud Sync
-cycle. After 10 minutes it checks once a minute, for up to 24 hours, which covers activations scheduled
-to start later.
+be before PIM has added the user to the group. The Logic App checks the group membership itself, right
+away and then every 5 seconds, and calls provisionOnDemand as soon as the user is in. After 10 minutes it
+checks once a minute, for up to 24 hours, which covers activations scheduled to start later.
 
 ## Do I need an app registration?
 
@@ -36,7 +38,7 @@ managed identity.
 | Identity | Purpose | Configuration |
 |---|---|---|
 | App registration `LA-PIM-JIT PIM custom extension` | Audience of the token PIM sends to the Logic App | Application ID URI `api://<logic app host>/<appId>`, `requestedAccessTokenVersion = 2` |
-| Logic App managed identity | Calls Microsoft Graph | Application permissions `Synchronization.ReadWrite.All`, `PrivilegedAssignmentSchedule.Read.AzureADGroup` |
+| Logic App managed identity | Calls Microsoft Graph | Application permissions `Synchronization.ReadWrite.All`, `GroupMember.Read.All`, `User.ReadBasic.All` |
 
 ## Repository contents
 
@@ -72,7 +74,7 @@ The defaults already contain your job:
 | `-SyncServicePrincipalId` | `7dc02c72-03d1-462b-bf75-335fbffaa19e` |
 | `-SyncJobId` | `AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903` |
 | `-SyncRuleId` | `auto`, so the Logic App looks it up from the job schema on each run |
-| `-SyncOnExpiry` | `$true`, which also syncs the removal when the activation ends |
+| `-SyncOnRemoval` | `$true`, which also syncs the removal when the user leaves the group |
 | `-GraphApiVersion` | `v1.0` (`beta` also works) |
 
 > The URL you have ends in `/restart`. **Don't call that from the Logic App.** Restart clears the job state
@@ -111,7 +113,7 @@ Use these steps instead of the script if you'd rather click through it yourself.
    Connect-MgGraph -Scopes AppRoleAssignment.ReadWrite.All, Application.Read.All
    $mi = '<Object (principal) ID of the managed identity>'
    $graphSp = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
-   foreach ($permission in 'Synchronization.ReadWrite.All', 'PrivilegedAssignmentSchedule.Read.AzureADGroup') {
+   foreach ($permission in 'Synchronization.ReadWrite.All', 'GroupMember.Read.All', 'User.ReadBasic.All') {
        $role = $graphSp.AppRoles | Where-Object { $_.Value -eq $permission -and $_.AllowedMemberTypes -contains 'Application' }
        New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $mi -PrincipalId $mi -ResourceId $graphSp.Id -AppRoleId $role.Id
    }
@@ -150,11 +152,11 @@ post-approval custom extension, and **Save**. Only the `member` role needs it, b
 1. Activate the group membership as an eligible user.
 2. In the Logic App, open **Run history**. Expect a run that:
    - returns `Approved` from `Respond_to_PIM`,
-   - loops in `Until_assignment_active` until the activation shows up,
+   - loops in `Until_member_added` until the user is in the group, usually a few seconds,
    - shows `{"result":"Success"…}` in `Provisioning_result`, or `Skipped` if AD already matched.
 3. Check the group in AD. The user is a member.
-4. If `SyncOnExpiry` is on, the same run stays **Running** until the activation ends. It then runs
-   `Provision_on_demand_after_expiry`.
+4. If `syncOnRemoval` is on, the same run stays **Running** until the user leaves the group (activation
+   expired or deactivated). It then runs `Provision_on_demand_after_removal`.
 
 To test without PIM, use a user who already has an **active** membership of the group. Take the trigger URL
 **with** `sig` from the Logic App designer, and post the sample body to it:
@@ -187,7 +189,7 @@ AD. It can't grant access.
 | `Terminate_invalid_payload` | The request body isn't the documented `privilegedAccessGroupAssignmentScheduleRequest` shape. Post-approval is a preview feature. Look at the trigger body and adjust `Parse_request`. |
 | `GraphLookupFailed`, or `Provision_on_demand` returns 403 | The run stops at the first failed Graph call and shows its status code and message. A 403 means the managed identity is missing a Graph permission. Grants can take a while to apply, because managed identity tokens are cached for up to 24 hours. |
 | `SyncRuleNotFound` | The job schema has no group rule, or more than one. Look at the `Get_sync_schema` output, then set the `syncRuleId` parameter to the right `synchronizationRules[].id`. |
-| `AssignmentNotActive` | The activation wasn't active within 24 hours of approval, for example because it was cancelled. |
+| `MemberNotAdded` | The user wasn't in the group within 24 hours of approval, for example because the activation was cancelled. Compare `groupId` and `principalId` in `Parse_request` with the real object IDs. |
 | `ProvisionOnDemandFailed`, or `Skipped` with an error code | Check the group is in scope of the Cloud Sync configuration and the user exists in AD. Run **Provision on demand** for the same group and user in the Cloud Sync portal to see the detailed steps. |
 | HTTP 429 | `provisionOnDemand` is limited to 5 requests per 10 seconds. The HTTP actions retry automatically. |
 
@@ -197,7 +199,7 @@ AD. It can't grant access.
   This Logic App assumes post-approval sends the same request body and accepts the same response
   (`evaluationId`, `evaluationOutcome`, `reason`). It always answers `Approved`, so it can never block or
   auto-approve an activation.
-- Early deactivation (`selfDeactivate`) isn't handled. The removal reaches AD on the next regular Cloud Sync
-  cycle, or when the expiry sync runs at the original end time.
+- The membership check (`checkMemberGroups`) is transitive. A user who is also a member through a nested
+  group counts as a member before PIM adds them, and after the activation ends.
 - `provisionOnDemand` accepts one group with up to five members per call. The Logic App sends one group and
   one member.
