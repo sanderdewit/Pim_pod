@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "10365326718128339202"
+      "templateHash": "6933222374148747151"
     },
     "description": "Consumption Logic App used as a PIM for Groups (post-approval) custom extension. After an activation it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -240,9 +240,26 @@
             ]
           }
         },
-        "Validate_request": {
+        "Initialize_pollError": {
           "runAfter": {
             "Initialize_syncRuleId": [
+              "Succeeded"
+            ]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "pollError",
+                "type": "string",
+                "value": ""
+              }
+            ]
+          }
+        },
+        "Validate_request": {
+          "runAfter": {
+            "Initialize_pollError": [
               "Succeeded"
             ]
           },
@@ -432,7 +449,7 @@
             ]
           },
           "type": "Until",
-          "expression": "@greater(length(variables('activeAssignments')), 0)",
+          "expression": "@or(greater(length(variables('activeAssignments')), 0), not(equals(variables('pollError'), '')))",
           "limit": {
             "count": 5000,
             "timeout": "PT24H"
@@ -451,6 +468,19 @@
                   "type": "ManagedServiceIdentity",
                   "audience": "https://graph.microsoft.com"
                 }
+              }
+            },
+            "Record_poll_error": {
+              "runAfter": {
+                "Get_assignment_instances": [
+                  "Failed",
+                  "TimedOut"
+                ]
+              },
+              "type": "SetVariable",
+              "inputs": {
+                "name": "pollError",
+                "value": "HTTP @{outputs('Get_assignment_instances')?['statusCode']}: @{coalesce(body('Get_assignment_instances')?['error']?['message'], string(body('Get_assignment_instances')))}"
               }
             },
             "Filter_group_instances": {
@@ -512,12 +542,48 @@
             }
           }
         },
-        "Fail_if_not_active": {
+        "Fail_if_lookup_failed": {
           "runAfter": {
             "Until_assignment_active": [
               "Succeeded",
               "Failed",
               "TimedOut"
+            ]
+          },
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "not": {
+                  "equals": [
+                    "@variables('pollError')",
+                    ""
+                  ]
+                }
+              }
+            ]
+          },
+          "actions": {
+            "Terminate_lookup_failed": {
+              "runAfter": {},
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Failed",
+                "runError": {
+                  "code": "GraphLookupFailed",
+                  "message": "Reading PIM assignmentScheduleInstances failed with @{variables('pollError')}. A 403 means the managed identity lacks PrivilegedAssignmentSchedule.Read.AzureADGroup."
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          }
+        },
+        "Fail_if_not_active": {
+          "runAfter": {
+            "Fail_if_lookup_failed": [
+              "Succeeded"
             ]
           },
           "type": "If",
@@ -539,7 +605,7 @@
                 "runStatus": "Failed",
                 "runError": {
                   "code": "AssignmentNotActive",
-                  "message": "No active PIM '@{outputs('Parse_request')?['accessId']}' assignment for principal @{outputs('Parse_request')?['principalId']} in group @{outputs('Parse_request')?['groupId']} within 24 hours, or the Graph lookup failed. Check Until_assignment_active in the run history and the managed identity's Graph permissions."
+                  "message": "No active PIM '@{outputs('Parse_request')?['accessId']}' assignment for principal @{outputs('Parse_request')?['principalId']} in group @{outputs('Parse_request')?['groupId']} within 24 hours. Check that the activation wasn't cancelled and that Get_assignment_instances returns it."
                 }
               }
             }
@@ -683,7 +749,7 @@
                 ]
               },
               "type": "Until",
-              "expression": "@equals(length(variables('activeAssignments')), 0)",
+              "expression": "@or(equals(length(variables('activeAssignments')), 0), not(equals(variables('pollError'), '')))",
               "limit": {
                 "count": 60,
                 "timeout": "PT1H"
@@ -702,6 +768,19 @@
                       "type": "ManagedServiceIdentity",
                       "audience": "https://graph.microsoft.com"
                     }
+                  }
+                },
+                "Record_poll_error_after_expiry": {
+                  "runAfter": {
+                    "Get_assignment_instances_after_expiry": [
+                      "Failed",
+                      "TimedOut"
+                    ]
+                  },
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "pollError",
+                    "value": "HTTP @{outputs('Get_assignment_instances_after_expiry')?['statusCode']}: @{coalesce(body('Get_assignment_instances_after_expiry')?['error']?['message'], string(body('Get_assignment_instances_after_expiry')))}"
                   }
                 },
                 "Filter_group_instances_after_expiry": {
