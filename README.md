@@ -89,14 +89,13 @@ The defaults already contain your job:
 The script prints these values at the end:
 
 ```
-Endpoint            https://prod-NN.westeurope.logic.azure.com/workflows/<id>/triggers/manual/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0
+Endpoint            https://prod-NN.westeurope.logic.azure.com/workflows/<id>/triggers/manual/paths/invoke?api-version=2016-10-01
 API authentication  LA-PIM-JIT PIM custom extension (app ID <appId>)
                     Application ID URI: api://prod-NN.westeurope.logic.azure.com/<appId>
 ```
 
-The endpoint URL deliberately has **no `sig=` parameter**. A Logic App rejects requests that carry both
-a SAS signature and a bearer token. Without `sig`, it accepts only Entra ID tokens that match the
-authorization policy.
+The template turns off the Logic App's shared access signature (SAS) URL, so the endpoint accepts only
+Entra ID tokens that match the authorization policy. See [Hardening](#hardening).
 
 ## Manual setup in the portal
 
@@ -127,6 +126,7 @@ Use these steps instead of the script if you'd rather click through it yourself.
 5. **Get the endpoint URL.** Open the designer, select the trigger **When a HTTP request is received**, and
    copy the **HTTP URL**. Remove the `&sig=…` part and the `:443`. You now have the target URL:
    `https://prod-NN.<region>.logic.azure.com/workflows/<id>/triggers/manual/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0`
+   Once you turn off SAS ([Hardening](#hardening), step 1), the URL becomes shorter; use that one instead.
 6. **Create the app registration.** Go to **Entra admin center > App registrations > New registration**,
    choose single tenant, and leave the redirect URI empty. Then:
    - In **Manifest**, set `requestedAccessTokenVersion` to `2`.
@@ -184,35 +184,106 @@ HTTP response. The `x-ms-client-request-id` header is the PIM request `id`.
      `Skipped` (nothing to change). The entry for the group lists `member` under `modifiedProperties`.
 3. Check the group in AD. The user is a member. The run ends here.
 
-To test without PIM, use a user who already has an **active** membership of the group. Take the trigger URL
-**with** `sig` from the Logic App designer, and post the sample body to it:
+To test without PIM, use a user who already has an **active** membership of the group. While SAS is still
+on (manual setup before hardening, or the script with `-KeepSas`), take the trigger URL **with** `sig` from
+the Logic App designer and post the sample body to it:
 
 ```powershell
 $body = Get-Content ./samples/pim-group-activation-request.json -Raw   # fill in principalId and groupId first
 Invoke-RestMethod -Method Post -Uri '<trigger URL with sig>' -ContentType 'application/json' -Body $body
 ```
 
-## Lock the endpoint to the PIM service (recommended)
+## Hardening
 
-By default the Logic App accepts any v2.0 token from your tenant whose audience is the app registration
-(`iss` + `aud`). Microsoft's documentation tells you to also check the caller's application ID (`azp`), but
-the value it publishes is a documentation placeholder GUID. Find the real value in your tenant:
+Do these once the first activation works. Steps 1 to 3 matter most.
 
-1. Redeploy with `-IncludeAuthorizationHeaderInRunHistory`. Activate once, open the run, copy the token from
-   the trigger's `Authorization` header and decode it locally, for example at https://jwt.ms (which decodes
-   in the browser). Note the `azp` claim.
-2. Redeploy **without** that switch and with `-PimCallerAppId <azp value>`. The authorization policy then
-   also requires `azp`.
+### 1. Turn off the SAS URL
 
-Even without this check, a caller can only make the Logic App sync the current Entra state of a group to
-AD. It can't grant access.
+Besides Entra ID tokens, a Logic App also accepts its shared-key URL (the one with `sig=`). Anyone who has
+that URL can start the workflow without a token. Turning SAS off leaves Entra ID tokens as the only way in.
+The template does this by default (`disableSas`); the script's `-KeepSas` switch is for testing only.
+
+For an existing Logic App, run this with the Az PowerShell module:
+
+```powershell
+$id  = '/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Logic/workflows/LA-PIM-JIT'
+$uri = "$($id)?api-version=2019-05-01"
+$wf  = (Invoke-AzRestMethod -Path $uri).Content | ConvertFrom-Json -Depth 100
+$wf.properties.accessControl.triggers |
+    Add-Member -NotePropertyName sasAuthenticationPolicy -NotePropertyValue @{ state = 'Disabled' } -Force
+Invoke-AzRestMethod -Method PUT -Path $uri -Payload ($wf | ConvertTo-Json -Depth 100)
+```
+
+Then:
+- The trigger URL in the designer becomes
+  `https://prod-NN.<region>.logic.azure.com/workflows/<id>/triggers/manual/paths/invoke?api-version=2016-10-01`,
+  without `sp`, `sv` and `sig`. Set it as the custom extension's target URL in PIM. The host doesn't change,
+  so the Application ID URI stays valid.
+- Regenerate both keys under **Settings > Access keys**. Old SAS URLs are blocked while SAS is off, but
+  they would work again if SAS were ever turned back on.
+
+### 2. Accept only tokens issued to PIM
+
+The authorization policy checks `iss` and `aud`. Any app in your tenant that can get a token for the app
+registration passes those checks. Also require PIM's own application ID in the `azp` claim. Microsoft's
+documentation shows a placeholder GUID for it, so read the real value from one call:
+
+1. In code view, add `"operationOptions": "IncludeAuthorizationHeadersInOutputs",` to the `manual` trigger,
+   next to `"type": "Request"`. Save and activate once.
+2. In that run, open the trigger's outputs and copy the `Authorization` header. Decode it locally:
+
+   ```powershell
+   $token = '<value of the Authorization header>'
+   $p = ($token -replace '^Bearer\s+', '').Split('.')[1].Replace('-', '+').Replace('_', '/')
+   $p += '=' * ((4 - $p.Length % 4) % 4)
+   $claims = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json
+   "azp=$($claims.azp) aud=$($claims.aud) iss=$($claims.iss)"
+   ```
+
+3. Remove the `operationOptions` line again and save, so tokens don't stay in run history.
+4. Under **Settings > Authorization**, edit the policy and add a custom claim `azp` with that value. With the
+   script, pass `-PimCallerAppId <value>`.
+
+### 3. Remove what you don't need
+
+- The managed identity needs only `Synchronization.ReadWrite.All`, `GroupMember.Read.All` and
+  `User.ReadBasic.All`. Remove anything else granted while testing, for example the PIM read permission
+  an earlier version used:
+
+  ```powershell
+  Connect-MgGraph -Scopes AppRoleAssignment.ReadWrite.All, Application.Read.All
+  $mi = '<Object (principal) ID of the managed identity>'
+  $graphSp = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
+  $roleId = ($graphSp.AppRoles | Where-Object Value -eq 'PrivilegedAssignmentSchedule.Read.AzureADGroup').Id
+  Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $mi | Where-Object AppRoleId -eq $roleId |
+      ForEach-Object { Remove-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $mi -AppRoleAssignmentId $_.Id }
+  ```
+
+- The app registration needs no client secrets or certificates. Delete any secret you added for testing.
+
+### 4. Protect the Logic App itself
+
+- Anyone who can edit the Logic App can make its managed identity call Graph with these permissions. Keep
+  write access to the resource group to the admins who own this, ideally through PIM for Azure resources,
+  and add an Activity log alert on `Microsoft.Logic/workflows/write` for the Logic App.
+- Run history shows the PIM request, including the user's name, UPN and email. Anyone with read access to
+  the Logic App can see it. To hide it, add
+  `"runtimeConfiguration": { "secureData": { "properties": [ "outputs" ] } }` to the `manual` trigger in code
+  view. The trade-off is that you can no longer inspect the request when troubleshooting. Alternatively,
+  limit who can read run contents under **Settings > Workflow settings > Access control configuration >
+  IP ranges for contents**.
+
+### 5. Get alerted on failures
+
+Create an alert rule on the Logic App metric **Runs Failed** (greater than 0). A failed run means an
+activation wasn't synced right away; it still reaches AD on the regular Cloud Sync cycle.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | The activation stays pending and the user is never added | PIM doesn't accept the reply. With a post-approval extension, try `evaluationOutcome` = `AutoApproved`, or link the extension as pre-approval. See [Which reply to send PIM](#which-reply-to-send-pim). The PIM audit log (**Entra admin center > Audit logs**, service **PIM**) may show why. |
-| No run appears after an activation | PIM got a 401. Check that the app registration issues v2.0 tokens (`requestedAccessTokenVersion = 2`), that the Application ID URI host matches the endpoint host, and that the endpoint URL has no `sig`. |
+| No run appears after an activation | PIM got a 401. Check that the app registration issues v2.0 tokens (`requestedAccessTokenVersion = 2`), that the Application ID URI host matches the endpoint host, that the endpoint URL has no `sig`, and, after turning off SAS, that it's the short URL without `sp` and `sv`. If you added an `azp` claim, check its value. |
 | `Terminate_invalid_payload` | The request body isn't the documented `privilegedAccessGroupAssignmentScheduleRequest` shape. Look at the trigger body and adjust `Parse_request`. |
 | `GraphLookupFailed`, or `Provision_on_demand` returns 403 | The run stops at the first failed Graph call and shows its status code and message. A 403 means the managed identity is missing a Graph permission. Grants can take a while to apply, because managed identity tokens are cached for up to 24 hours. |
 | `SyncRuleNotFound` | The job schema has no group rule, or more than one. Look at the `Get_sync_schema` output, then set the `syncRuleId` parameter to the right `synchronizationRules[].id`. |
@@ -222,8 +293,9 @@ AD. It can't grant access.
 
 ## Notes and limits
 
-- The Logic App always answers `Approved` (never `AutoApproved` or `Denied`), so it never blocks an
-  activation and never skips a required human approval. PIM custom extensions are a preview feature.
+- The Logic App never answers `Denied`, so it never blocks an activation. With the default `Approved` it
+  never skips a required human approval either; see [Which reply to send PIM](#which-reply-to-send-pim) before
+  using `AutoApproved`. PIM custom extensions are a preview feature.
 - The membership check (`checkMemberGroups`) is transitive. A user who is also a member through a nested
   group counts as a member before PIM adds them.
 - Only the activation is synced right away. When the activation ends, the removal reaches AD on the next

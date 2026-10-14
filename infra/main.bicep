@@ -35,6 +35,9 @@ param graphApiVersion string = 'v1.0'
 ])
 param evaluationOutcome string = 'Approved'
 
+@description('Turn off the shared access signature (SAS) URL, so only Entra ID tokens that match the authorization policy can start the workflow.')
+param disableSas bool = true
+
 @description('Troubleshooting only: include the Authorization header in the trigger outputs (run history) so you can inspect the token PIM sends.')
 param includeAuthorizationHeaderInRunHistory bool = false
 
@@ -73,16 +76,19 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   properties: {
     state: 'Enabled'
     accessControl: {
-      triggers: {
-        openAuthenticationPolicies: {
-          policies: {
-            'PIM-custom-extension': {
-              type: 'AAD'
-              claims: tokenClaims
+      triggers: union(
+        {
+          openAuthenticationPolicies: {
+            policies: {
+              'PIM-custom-extension': {
+                type: 'AAD'
+                claims: tokenClaims
+              }
             }
           }
-        }
-      }
+        },
+        disableSas ? { sasAuthenticationPolicy: { state: 'Disabled' } } : {}
+      )
     }
     definition: includeAuthorizationHeaderInRunHistory
       ? union(workflowDefinition, {
@@ -120,7 +126,9 @@ output logicAppId string = logicApp.id
 output logicAppPrincipalId string = logicApp.identity.principalId
 
 @description('Target URL for the PIM custom extension: the trigger URL without the SAS signature, so only OAuth requests are accepted.')
-output customExtensionTargetUrl string = '${endpoint}/triggers/manual/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0'
+output customExtensionTargetUrl string = disableSas
+  ? '${endpoint}/triggers/manual/paths/invoke?api-version=2016-10-01'
+  : '${endpoint}/triggers/manual/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0'
 
 @description('Application ID URI to set on the app registration. Its host must match the host of the target URL.')
 output applicationIdUri string = 'api://${split(split(endpoint, '://')[1], '/')[0]}/${apiAppId}'

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "16616848347694897808"
+      "templateHash": "9521850321044144429"
     },
     "description": "Consumption Logic App used as a PIM for Groups (pre-approval) custom extension. Once PIM adds the member it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -78,6 +78,13 @@
       ],
       "metadata": {
         "description": "Decision returned to PIM. Approved continues the normal PIM flow, including any human approval. AutoApproved skips manual approval, so only use it with a post-approval extension or for groups without required approval."
+      }
+    },
+    "disableSas": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Turn off the shared access signature (SAS) URL, so only Entra ID tokens that match the authorization policy can start the workflow."
       }
     },
     "includeAuthorizationHeaderInRunHistory": {
@@ -724,16 +731,7 @@
       "properties": {
         "state": "Enabled",
         "accessControl": {
-          "triggers": {
-            "openAuthenticationPolicies": {
-              "policies": {
-                "PIM-custom-extension": {
-                  "type": "AAD",
-                  "claims": "[variables('tokenClaims')]"
-                }
-              }
-            }
-          }
+          "triggers": "[union(createObject('openAuthenticationPolicies', createObject('policies', createObject('PIM-custom-extension', createObject('type', 'AAD', 'claims', variables('tokenClaims'))))), if(parameters('disableSas'), createObject('sasAuthenticationPolicy', createObject('state', 'Disabled')), createObject()))]"
         },
         "definition": "[if(parameters('includeAuthorizationHeaderInRunHistory'), union(variables('workflowDefinition'), createObject('triggers', createObject('manual', union(variables('workflowDefinition').triggers.manual, createObject('operationOptions', 'IncludeAuthorizationHeadersInOutputs'))))), variables('workflowDefinition'))]",
         "parameters": {
@@ -770,7 +768,7 @@
       "metadata": {
         "description": "Target URL for the PIM custom extension: the trigger URL without the SAS signature, so only OAuth requests are accepted."
       },
-      "value": "[format('{0}/triggers/manual/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0', replace(reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01').accessEndpoint, ':443', ''))]"
+      "value": "[if(parameters('disableSas'), format('{0}/triggers/manual/paths/invoke?api-version=2016-10-01', replace(reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01').accessEndpoint, ':443', '')), format('{0}/triggers/manual/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0', replace(reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01').accessEndpoint, ':443', '')))]"
     },
     "applicationIdUri": {
       "type": "string",

@@ -54,7 +54,10 @@ param(
     [string] $EvaluationOutcome = 'Approved',
 
     # Troubleshooting only: show the Authorization header PIM sends in the Logic App run history.
-    [switch] $IncludeAuthorizationHeaderInRunHistory
+    [switch] $IncludeAuthorizationHeaderInRunHistory,
+
+    # Testing only: keep the shared access signature (SAS) URL working next to Entra ID tokens.
+    [switch] $KeepSas
 )
 
 $ErrorActionPreference = 'Stop'
@@ -141,6 +144,7 @@ $deployment = New-AzResourceGroupDeployment `
         graphApiVersion                        = $GraphApiVersion
         evaluationOutcome                      = $EvaluationOutcome
         includeAuthorizationHeaderInRunHistory = $IncludeAuthorizationHeaderInRunHistory.IsPresent
+        disableSas                             = -not $KeepSas.IsPresent
     }
 
 $targetUrl = $deployment.Outputs['customExtensionTargetUrl'].Value
