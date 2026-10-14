@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "6988961586589256040"
+      "templateHash": "16616848347694897808"
     },
     "description": "Consumption Logic App used as a PIM for Groups (pre-approval) custom extension. Once PIM adds the member it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -56,13 +56,6 @@
       "defaultValue": "auto",
       "metadata": {
         "description": "ID of the group synchronization rule (GET /servicePrincipals/{id}/synchronization/jobs/{jobId}/schema -> synchronizationRules[].id). \"auto\" looks it up at run time."
-      }
-    },
-    "syncOnRemoval": {
-      "type": "bool",
-      "defaultValue": true,
-      "metadata": {
-        "description": "Run provisionOnDemand again when the user leaves the group (activation expired or deactivated), so the AD membership is removed promptly."
       }
     },
     "graphApiVersion": {
@@ -123,13 +116,6 @@
           "defaultValue": "auto",
           "metadata": {
             "description": "ID of the group synchronization rule in the job schema. 'auto' looks it up at run time."
-          }
-        },
-        "syncOnRemoval": {
-          "type": "Bool",
-          "defaultValue": true,
-          "metadata": {
-            "description": "Run provisionOnDemand again when the user leaves the group (activation expired or deactivated), so the AD membership is removed promptly."
           }
         },
         "graphApiVersion": {
@@ -719,150 +705,6 @@
           "else": {
             "actions": {}
           }
-        },
-        "Sync_again_on_removal": {
-          "runAfter": {
-            "Fail_if_provisioning_failed": [
-              "Succeeded"
-            ]
-          },
-          "type": "If",
-          "expression": {
-            "and": [
-              {
-                "equals": [
-                  "@parameters('syncOnRemoval')",
-                  true
-                ]
-              }
-            ]
-          },
-          "actions": {
-            "Until_member_removed": {
-              "runAfter": {},
-              "type": "Until",
-              "expression": "@or(not(variables('isMember')), not(equals(variables('pollError'), '')))",
-              "limit": {
-                "count": 5000,
-                "timeout": "PT25H"
-              },
-              "actions": {
-                "Delay_before_removal_check": {
-                  "runAfter": {},
-                  "type": "Wait",
-                  "inputs": {
-                    "interval": {
-                      "count": 60,
-                      "unit": "Second"
-                    }
-                  }
-                },
-                "Check_membership_for_removal": {
-                  "runAfter": {
-                    "Delay_before_removal_check": [
-                      "Succeeded"
-                    ]
-                  },
-                  "type": "Http",
-                  "inputs": {
-                    "method": "POST",
-                    "uri": "https://graph.microsoft.com/v1.0/users/@{outputs('Parse_request')?['principalId']}/checkMemberGroups",
-                    "headers": {
-                      "Content-Type": "application/json"
-                    },
-                    "body": {
-                      "groupIds": [
-                        "@{outputs('Parse_request')?['groupId']}"
-                      ]
-                    },
-                    "authentication": {
-                      "type": "ManagedServiceIdentity",
-                      "audience": "https://graph.microsoft.com"
-                    }
-                  }
-                },
-                "Record_poll_error_for_removal": {
-                  "runAfter": {
-                    "Check_membership_for_removal": [
-                      "Failed",
-                      "TimedOut"
-                    ]
-                  },
-                  "type": "SetVariable",
-                  "inputs": {
-                    "name": "pollError",
-                    "value": "HTTP @{outputs('Check_membership_for_removal')?['statusCode']}: @{coalesce(body('Check_membership_for_removal')?['error']?['message'], string(body('Check_membership_for_removal')))}"
-                  }
-                },
-                "Set_isMember_for_removal": {
-                  "runAfter": {
-                    "Check_membership_for_removal": [
-                      "Succeeded"
-                    ]
-                  },
-                  "type": "SetVariable",
-                  "inputs": {
-                    "name": "isMember",
-                    "value": "@contains(toLower(string(coalesce(body('Check_membership_for_removal')?['value'], json('[]')))), outputs('Parse_request')?['groupId'])"
-                  }
-                }
-              }
-            },
-            "Provision_on_demand_after_removal": {
-              "runAfter": {
-                "Until_member_removed": [
-                  "Succeeded",
-                  "Failed",
-                  "TimedOut"
-                ]
-              },
-              "type": "Http",
-              "inputs": {
-                "method": "POST",
-                "uri": "https://graph.microsoft.com/@{parameters('graphApiVersion')}/servicePrincipals/@{parameters('syncServicePrincipalId')}/synchronization/jobs/@{parameters('syncJobId')}/provisionOnDemand",
-                "headers": {
-                  "Content-Type": "application/json"
-                },
-                "body": {
-                  "parameters": [
-                    {
-                      "ruleId": "@{variables('syncRuleId')}",
-                      "subjects": [
-                        {
-                          "objectId": "@{outputs('Parse_request')?['groupId']}",
-                          "objectTypeName": "Group",
-                          "links": {
-                            "members": [
-                              {
-                                "objectId": "@{outputs('Parse_request')?['principalId']}",
-                                "objectTypeName": "User"
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    }
-                  ]
-                },
-                "authentication": {
-                  "type": "ManagedServiceIdentity",
-                  "audience": "https://graph.microsoft.com"
-                }
-              }
-            },
-            "Provisioning_result_after_removal": {
-              "runAfter": {
-                "Provision_on_demand_after_removal": [
-                  "Succeeded"
-                ]
-              },
-              "type": "Compose",
-              "inputs": "@if(startsWith(trim(coalesce(body('Provision_on_demand_after_removal')?['value'], '[]')), '['), json(coalesce(body('Provision_on_demand_after_removal')?['value'], '[]')), createArray(json(coalesce(body('Provision_on_demand_after_removal')?['value'], '{}'))))"
-            }
-          },
-          "else": {
-            "actions": {}
-          }
         }
       },
       "outputs": {}
@@ -903,9 +745,6 @@
           },
           "syncRuleId": {
             "value": "[parameters('syncRuleId')]"
-          },
-          "syncOnRemoval": {
-            "value": "[parameters('syncOnRemoval')]"
           },
           "graphApiVersion": {
             "value": "[parameters('graphApiVersion')]"

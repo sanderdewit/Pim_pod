@@ -16,9 +16,7 @@ PIM continues its normal flow: human approval if required,                      
 then PIM adds the user to the group                                                         │
                                                                                             │
   2. Checks every 5 seconds until the user is a member of the group (checkMemberGroups)     │ managed identity
-  3. POST …/synchronization/jobs/{jobId}/provisionOnDemand  (the group + the activated user)  ├──► Microsoft Graph ──► Cloud Sync ──► AD group
-  4. Optional: checks every minute until the user has left the group (expired or            │
-     deactivated), then runs provisionOnDemand again so AD drops the user right away         │
+  3. POST …/synchronization/jobs/{jobId}/provisionOnDemand  (the group + the activated user)  └──► Microsoft Graph ──► Cloud Sync ──► AD group
 ```
 
 This replaces the regular Cloud Sync cycle (every 20 minutes) for the activated user: the membership
@@ -81,7 +79,6 @@ The defaults already contain your job:
 | `-SyncServicePrincipalId` | `7dc02c72-03d1-462b-bf75-335fbffaa19e` |
 | `-SyncJobId` | `AAD2ADGroupProvisioning.bbafb01eee104a81847ce62a41c8c1d8.84174f1a-dc83-40c7-b120-c099a8c0d903` |
 | `-SyncRuleId` | `auto`, so the Logic App looks it up from the job schema on each run |
-| `-SyncOnRemoval` | `$true`, which also syncs the removal when the user leaves the group |
 | `-GraphApiVersion` | `v1.0` (`beta` also works) |
 | `-EvaluationOutcome` | `Approved`. See [Which reply to send PIM](#which-reply-to-send-pim) |
 
@@ -185,9 +182,7 @@ HTTP response. The `x-ms-client-request-id` header is the PIM request `id`.
    - loops in `Until_member_added` until the user is in the group, usually a few seconds,
    - shows the Cloud Sync log entries in `Provisioning_result`, each with `statusInfo.status` `Success` or
      `Skipped` (nothing to change). The entry for the group lists `member` under `modifiedProperties`.
-3. Check the group in AD. The user is a member.
-4. If `syncOnRemoval` is on, the same run stays **Running** until the user leaves the group (activation
-   expired or deactivated). It then runs `Provision_on_demand_after_removal`.
+3. Check the group in AD. The user is a member. The run ends here.
 
 To test without PIM, use a user who already has an **active** membership of the group. Take the trigger URL
 **with** `sig` from the Logic App designer, and post the sample body to it:
@@ -230,6 +225,8 @@ AD. It can't grant access.
 - The Logic App always answers `Approved` (never `AutoApproved` or `Denied`), so it never blocks an
   activation and never skips a required human approval. PIM custom extensions are a preview feature.
 - The membership check (`checkMemberGroups`) is transitive. A user who is also a member through a nested
-  group counts as a member before PIM adds them, and after the activation ends.
+  group counts as a member before PIM adds them.
+- Only the activation is synced right away. When the activation ends, the removal reaches AD on the next
+  regular Cloud Sync cycle.
 - `provisionOnDemand` accepts one group with up to five members per call. The Logic App sends one group and
   one member.

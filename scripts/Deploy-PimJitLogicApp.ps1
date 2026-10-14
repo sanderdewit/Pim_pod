@@ -46,8 +46,6 @@ param(
     # Application ID in the azp claim of the token PIM sends. Leave empty until you have confirmed it.
     [string] $PimCallerAppId = '',
 
-    [bool] $SyncOnRemoval = $true,
-
     [ValidateSet('v1.0', 'beta')]
     [string] $GraphApiVersion = 'v1.0',
 
@@ -65,7 +63,7 @@ $graph = 'https://graph.microsoft.com'
 $graphAppId = '00000003-0000-0000-c000-000000000000'
 $graphPermissions = @(
     'Synchronization.ReadWrite.All', # read the job schema, provisionOnDemand
-    'GroupMember.Read.All',          # check when the user joins / leaves the group
+    'GroupMember.Read.All',          # check when PIM has added the user to the group
     'User.ReadBasic.All'             # (checkMemberGroups on a user needs both)
 )
 
@@ -140,7 +138,6 @@ $deployment = New-AzResourceGroupDeployment `
         syncServicePrincipalId                 = $SyncServicePrincipalId
         syncJobId                              = $SyncJobId
         syncRuleId                             = $SyncRuleId
-        syncOnRemoval                          = $SyncOnRemoval
         graphApiVersion                        = $GraphApiVersion
         evaluationOutcome                      = $EvaluationOutcome
         includeAuthorizationHeaderInRunHistory = $IncludeAuthorizationHeaderInRunHistory.IsPresent
