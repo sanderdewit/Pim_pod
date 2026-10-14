@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "659426834118840318"
+      "templateHash": "6988961586589256040"
     },
     "description": "Consumption Logic App used as a PIM for Groups (pre-approval) custom extension. Once PIM adds the member it runs Entra Cloud Sync provisionOnDemand so the AD group membership is updated immediately."
   },
@@ -672,11 +672,23 @@
             ]
           },
           "type": "Compose",
-          "inputs": "@json(coalesce(body('Provision_on_demand')?['key'], '{\"result\":\"Unknown\"}'))"
+          "inputs": "@if(startsWith(trim(coalesce(body('Provision_on_demand')?['value'], '[]')), '['), json(coalesce(body('Provision_on_demand')?['value'], '[]')), createArray(json(coalesce(body('Provision_on_demand')?['value'], '{}'))))"
+        },
+        "Filter_failed_entries": {
+          "runAfter": {
+            "Provisioning_result": [
+              "Succeeded"
+            ]
+          },
+          "type": "Query",
+          "inputs": {
+            "from": "@outputs('Provisioning_result')",
+            "where": "@and(not(equals(coalesce(item()?['statusInfo']?['status'], ''), '')), not(contains(createArray('Success', 'Skipped'), coalesce(item()?['statusInfo']?['status'], ''))))"
+          }
         },
         "Fail_if_provisioning_failed": {
           "runAfter": {
-            "Provisioning_result": [
+            "Filter_failed_entries": [
               "Succeeded"
             ]
           },
@@ -684,20 +696,10 @@
           "expression": {
             "and": [
               {
-                "not": {
-                  "equals": [
-                    "@outputs('Provisioning_result')?['result']",
-                    "Success"
-                  ]
-                }
-              },
-              {
-                "not": {
-                  "equals": [
-                    "@outputs('Provisioning_result')?['result']",
-                    "Skipped"
-                  ]
-                }
+                "greater": [
+                  "@length(body('Filter_failed_entries'))",
+                  0
+                ]
               }
             ]
           },
@@ -709,7 +711,7 @@
                 "runStatus": "Failed",
                 "runError": {
                   "code": "ProvisionOnDemandFailed",
-                  "message": "provisionOnDemand returned: @{body('Provision_on_demand')?['key']}"
+                  "message": "provisionOnDemand reported @{length(body('Filter_failed_entries'))} failed entries. First: @{first(body('Filter_failed_entries'))?['reportableIdentifier']} @{string(first(body('Filter_failed_entries'))?['statusInfo'])}. See Provisioning_result for all entries."
                 }
               }
             }
@@ -855,7 +857,7 @@
                 ]
               },
               "type": "Compose",
-              "inputs": "@json(coalesce(body('Provision_on_demand_after_removal')?['key'], '{\"result\":\"Unknown\"}'))"
+              "inputs": "@if(startsWith(trim(coalesce(body('Provision_on_demand_after_removal')?['value'], '[]')), '['), json(coalesce(body('Provision_on_demand_after_removal')?['value'], '[]')), createArray(json(coalesce(body('Provision_on_demand_after_removal')?['value'], '{}'))))"
             }
           },
           "else": {

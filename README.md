@@ -183,7 +183,8 @@ HTTP response. The `x-ms-client-request-id` header is the PIM request `id`.
 2. In the Logic App, open **Run history**. Expect a run that:
    - returns `Approved` from `Respond_to_PIM`,
    - loops in `Until_member_added` until the user is in the group, usually a few seconds,
-   - shows `{"result":"Success"…}` in `Provisioning_result`, or `Skipped` if AD already matched.
+   - shows the Cloud Sync log entries in `Provisioning_result`, each with `statusInfo.status` `Success` or
+     `Skipped` (nothing to change). The entry for the group lists `member` under `modifiedProperties`.
 3. Check the group in AD. The user is a member.
 4. If `syncOnRemoval` is on, the same run stays **Running** until the user leaves the group (activation
    expired or deactivated). It then runs `Provision_on_demand_after_removal`.
@@ -221,7 +222,7 @@ AD. It can't grant access.
 | `GraphLookupFailed`, or `Provision_on_demand` returns 403 | The run stops at the first failed Graph call and shows its status code and message. A 403 means the managed identity is missing a Graph permission. Grants can take a while to apply, because managed identity tokens are cached for up to 24 hours. |
 | `SyncRuleNotFound` | The job schema has no group rule, or more than one. Look at the `Get_sync_schema` output, then set the `syncRuleId` parameter to the right `synchronizationRules[].id`. |
 | `MemberNotAdded` | The user wasn't in the group within 24 hours of approval, for example because the activation was cancelled. Compare `groupId` and `principalId` in `Parse_request` with the real object IDs. |
-| `ProvisionOnDemandFailed`, or `Skipped` with an error code | Check the group is in scope of the Cloud Sync configuration and the user exists in AD. Run **Provision on demand** for the same group and user in the Cloud Sync portal to see the detailed steps. |
+| `ProvisionOnDemandFailed` (an entry in `Provisioning_result` has a status other than `Success` or `Skipped`) | Check the group is in scope of the Cloud Sync configuration and the user exists in AD. Run **Provision on demand** for the same group and user in the Cloud Sync portal to see the detailed steps. |
 | HTTP 429 | `provisionOnDemand` is limited to 5 requests per 10 seconds. The HTTP actions retry automatically. |
 
 ## Notes and limits
